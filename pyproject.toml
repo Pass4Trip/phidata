@@ -35,6 +35,15 @@ dependencies = [
   "tomli",
   "typer",
   "typing-extensions",
+  "openai",
+  "duckduckgo-search",
+  "phidata",
+  "fastapi",
+  "uvicorn",
+  # Nouvelles dépendances pour le stockage et la vectorisation
+  "sqlalchemy",
+  "psycopg2-binary",
+  "pgvector",
 ]
 
 [project.optional-dependencies]

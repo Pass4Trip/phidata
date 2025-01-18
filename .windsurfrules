@@ -1,0 +1,4 @@
+- j'utilise en solution de venv : UV donc si tu dois me proposer des pip installs, tu dois les faire avec uv pip install...
+- j'utilise un fichier toml avec UV pour gérer les dependencies
+- Quand il manque une lib tu dois l'ajouter dans le toml, regénérer le requirements et l'installer avec uv pip install .
+Utilise pour me conseiller pour le code dans ce projet de Phidata dont la doc est ici : https://docs.phidata.com/introduction
