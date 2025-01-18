@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-rabbitmq-listener
+  labels:
+    app: postgres-rabbitmq-listener
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-rabbitmq-listener
+  template:
+    metadata:
+      labels:
+        app: postgres-rabbitmq-listener
+    spec:
+      containers:
+      - name: listener
+        image: localhost:32000/postgres-rabbitmq-listener:v1
+        command: ["python"]
+        args: ["-u", "postgres_rabbitmq_listener.py"]
+        env:
+        - name: RUNTIME_ENV
+          value: dev
+        - name: PG_HOST
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: host
+        - name: PG_PORT
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: port
+        - name: PG_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: database
+        - name: PG_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+        - name: RABBITMQ_HOST
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-credentials
+              key: host
+        - name: RABBITMQ_PORT
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-credentials
+              key: port
+        - name: RABBITMQ_USER
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-credentials
+              key: username
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-credentials
+              key: password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-rabbitmq-listener
+spec:
+  selector:
+    app: postgres-rabbitmq-listener
+  ports:
+  - port: 8001
+    targetPort: 8000
+  type: ClusterIP
