@@ -15,7 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PostgresRabbitMQListener:
-    def __init__(self):
+    def __init__(self, 
+                 pg_schema='ai', 
+                 table_name='web_searcher__memory', 
+                 queue_name='queue_vinh_test', 
+                 notification_channel='web_searcher_memory_channel'):
         # Paramètres de connexion PostgreSQL
         self.pg_host = os.getenv('PG_HOST')
         self.pg_port = os.getenv('PG_PORT')
@@ -24,8 +28,8 @@ class PostgresRabbitMQListener:
         self.pg_password = os.getenv('PG_PASSWORD')
         
         # Schéma et table spécifiques
-        self.pg_schema = 'ai'  # À ajuster si nécessaire
-        self.table_name = 'web_searcher__memory'
+        self.pg_schema = pg_schema
+        self.table_name = table_name
 
         # Paramètres RabbitMQ
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST')
@@ -34,8 +38,8 @@ class PostgresRabbitMQListener:
         self.rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
 
         # Queue de notifications
-        self.queue_name = 'queue_vinh_test'
-        self.notification_channel = 'web_searcher_memory_channel'
+        self.queue_name = queue_name
+        self.notification_channel = notification_channel
 
     def create_trigger(self, pg_cursor):
         """Créer un trigger pour la table web_searcher__memory"""

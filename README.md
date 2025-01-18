@@ -73,21 +73,7 @@ cd listeners
 docker build -t postgres-rabbitmq-listener:v1 .
 ```
 
-2. Configurer les variables d'environnement
-Créez un fichier `.env` avec les variables suivantes :
-```
-PG_HOST=votre_hôte_postgresql
-PG_PORT=5432
-PG_DATABASE=votre_base_de_données
-PG_USER=votre_utilisateur
-PG_PASSWORD=votre_mot_de_passe
-RABBITMQ_HOST=votre_hôte_rabbitmq
-RABBITMQ_PORT=5672
-RABBITMQ_USER=votre_utilisateur
-RABBITMQ_PASSWORD=votre_mot_de_passe
-```
-
-3. Déployer avec Kubernetes
+2. Déployer avec Kubernetes
 ```bash
 kubectl apply -f postgres-rabbitmq-listener-deployment.yaml
 ```
@@ -107,6 +93,5 @@ kubectl logs postgres-rabbitmq-listener-<pod-name>
 ```
 
 ### Dépannage
-- Vérifiez que les variables d'environnement sont correctes
-- Assurez-vous que les ports PostgreSQL et RabbitMQ sont accessibles
+- Vérifiez que les ports PostgreSQL et RabbitMQ sont accessibles
 - Vérifiez les logs pour des détails spécifiques sur les erreurs de connexion
