@@ -88,6 +88,25 @@ class PostgresRabbitMQListener:
             logger.error(traceback.format_exc())
             return None, None
 
+    def transform_payload(self, payload):
+        """Transformer le payload en format cible"""
+        try:
+            # Extraire les informations du payload original
+            new_row = payload.get('new_row', {})
+            memory = new_row.get('memory', {})
+            
+            # Construire le nouveau payload
+            transformed_payload = {
+                'type': 'user',
+                'user_id': new_row.get('user_id', ''),
+                'user_info': memory.get('memory', '')
+            }
+            
+            return transformed_payload
+        except Exception as e:
+            logger.error(f"Erreur de transformation du payload : {e}")
+            return None
+
     def start_listening(self):
         while True:
             try:
@@ -126,15 +145,21 @@ class PostgresRabbitMQListener:
                             # Parser le payload JSON
                             payload = json.loads(notify.payload)
                             
-                            # Publier sur RabbitMQ
-                            rabbit_channel.basic_publish(
-                                exchange='',
-                                routing_key=self.queue_name,
-                                body=json.dumps(payload),
-                                properties=pika.BasicProperties(delivery_mode=2)
-                            )
+                            # Transformer le payload
+                            transformed_payload = self.transform_payload(payload)
                             
-                            logger.info(f" Notification transmise : {payload}")
+                            if transformed_payload:
+                                # Publier sur RabbitMQ
+                                rabbit_channel.basic_publish(
+                                    exchange='',
+                                    routing_key=self.queue_name,
+                                    body=json.dumps(transformed_payload),
+                                    properties=pika.BasicProperties(delivery_mode=2)
+                                )
+                                
+                                logger.info(f" Notification transmise : {transformed_payload}")
+                            else:
+                                logger.warning(" Payload non transformé, aucune publication")
                         
                         except Exception as e:
                             logger.error(f" Erreur de traitement : {e}")
