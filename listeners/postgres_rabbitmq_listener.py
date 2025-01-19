@@ -74,24 +74,35 @@ class PostgresRabbitMQListener:
         logger.info(f"Trigger {trigger_name} créé pour la table {self.pg_schema}.{self.table_name}")
 
     def create_rabbitmq_connection(self):
-        """Créer une connexion RabbitMQ avec gestion des erreurs"""
+        """Créer une connexion RabbitMQ avec gestion des erreurs avancée"""
         try:
-            connection_params = pika.ConnectionParameters(
-                host=self.rabbitmq_host,
-                port=int(self.rabbitmq_port),
-                credentials=pika.PlainCredentials(
-                    self.rabbitmq_user, 
-                    self.rabbitmq_password
-                ),
-                connection_attempts=3,
-                retry_delay=5,
-                socket_timeout=5
+            # Paramètres de connexion
+            credentials = pika.PlainCredentials(
+                username=self.rabbitmq_user, 
+                password=self.rabbitmq_password
             )
-            connection = pika.BlockingConnection(connection_params)
+            parameters = pika.ConnectionParameters(
+                host=self.rabbitmq_host,
+                port=self.rabbitmq_port,
+                credentials=credentials,
+                connection_attempts=5,  # Nombre de tentatives de connexion
+                retry_delay=5,  # Délai entre les tentatives (en secondes)
+                socket_timeout=10  # Timeout de socket
+            )
+
+            # Création de la connexion
+            connection = pika.BlockingConnection(parameters)
             channel = connection.channel()
+            
+            # Déclaration de la queue sans modifier ses paramètres existants
             channel.queue_declare(queue=self.queue_name, durable=True)
+
+            logger.info(f"Connexion RabbitMQ établie sur {self.rabbitmq_host}:{self.rabbitmq_port}")
             return connection, channel
-        except Exception as e:
+
+        except (pika.exceptions.AMQPConnectionError, 
+                pika.exceptions.AMQPChannelError, 
+                ConnectionResetError) as e:
             logger.error(f"Erreur de connexion RabbitMQ : {e}")
             logger.error(traceback.format_exc())
             return None, None
@@ -128,10 +139,22 @@ class PostgresRabbitMQListener:
                 )
                 pg_conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
 
-                # Connexion RabbitMQ
-                rabbit_connection, rabbit_channel = self.create_rabbitmq_connection()
+                # Connexion RabbitMQ avec gestion des erreurs
+                rabbit_connection, rabbit_channel = None, None
+                max_attempts = 10
+                attempt = 0
+
+                while attempt < max_attempts:
+                    rabbit_connection, rabbit_channel = self.create_rabbitmq_connection()
+                    if rabbit_connection and rabbit_channel:
+                        break
+                    
+                    attempt += 1
+                    logger.warning(f"Tentative de connexion RabbitMQ {attempt}/{max_attempts}")
+                    time.sleep(10)  # Attente entre les tentatives
+
                 if not rabbit_connection or not rabbit_channel:
-                    raise Exception("Impossible de se connecter à RabbitMQ")
+                    raise Exception("Impossible de se connecter à RabbitMQ après plusieurs tentatives")
 
                 # Curseur PostgreSQL
                 pg_cursor = pg_conn.cursor()
@@ -141,7 +164,7 @@ class PostgresRabbitMQListener:
                 
                 pg_cursor.execute(f"LISTEN {self.notification_channel};")
                 
-                logger.info(f" Démarrage de l'écoute des notifications PostgreSQL sur le canal {self.notification_channel}...")
+                logger.info(f"Démarrage de l'écoute des notifications PostgreSQL sur le canal {self.notification_channel}...")
 
                 while True:
                     pg_conn.poll()
@@ -157,27 +180,37 @@ class PostgresRabbitMQListener:
                             transformed_payload = self.transform_payload(payload)
                             
                             if transformed_payload:
-                                # Publier sur RabbitMQ
-                                rabbit_channel.basic_publish(
-                                    exchange='',
-                                    routing_key=self.queue_name,
-                                    body=json.dumps(transformed_payload),
-                                    properties=pika.BasicProperties(delivery_mode=2)
-                                )
+                                # Publier sur RabbitMQ avec gestion des erreurs
+                                try:
+                                    rabbit_channel.basic_publish(
+                                        exchange='',
+                                        routing_key=self.queue_name,
+                                        body=json.dumps(transformed_payload),
+                                        properties=pika.BasicProperties(
+                                            delivery_mode=2,  # Message persistant
+                                            content_type='application/json'
+                                        )
+                                    )
+                                    
+                                    logger.info(f"Notification transmise : {transformed_payload}")
                                 
-                                logger.info(f" Notification transmise : {transformed_payload}")
+                                except (pika.exceptions.AMQPError, ConnectionResetError) as publish_error:
+                                    logger.error(f"Erreur de publication RabbitMQ : {publish_error}")
+                                    # Tentative de reconnexion
+                                    rabbit_connection, rabbit_channel = self.create_rabbitmq_connection()
+                            
                             else:
-                                logger.warning(" Payload non transformé, aucune publication")
+                                logger.warning("Payload non transformé, aucune publication")
                         
                         except Exception as e:
-                            logger.error(f" Erreur de traitement : {e}")
+                            logger.error(f"Erreur de traitement : {e}")
                     
                     time.sleep(0.1)
 
-            except (psycopg2.Error, pika.exceptions.AMQPError) as e:
-                logger.error(f" Erreur de connexion : {e}")
+            except (psycopg2.Error, pika.exceptions.AMQPError, ConnectionResetError) as e:
+                logger.error(f"Erreur de connexion : {e}")
                 logger.error(traceback.format_exc())
-                time.sleep(10)
+                time.sleep(30)  # Attente plus longue en cas d'erreur
 
 # Exécution
 if __name__ == "__main__":
