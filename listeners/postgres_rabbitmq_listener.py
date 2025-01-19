@@ -42,9 +42,13 @@ class PostgresRabbitMQListener:
         self.notification_channel = notification_channel
 
     def create_trigger(self, pg_cursor):
-        """Créer un trigger pour la table web_searcher__memory"""
+        """Créer un trigger pour la table dynamique"""
+        # Noms dynamiques basés sur le nom de la table
+        function_name = f"notify_{self.table_name.replace('__', '_')}_change"
+        trigger_name = f"{self.table_name}_insert_trigger"
+
         trigger_function = f"""
-        CREATE OR REPLACE FUNCTION notify_web_searcher_memory_change()
+        CREATE OR REPLACE FUNCTION {function_name}()
         RETURNS TRIGGER AS $$
         DECLARE
             payload JSON;
@@ -61,13 +65,13 @@ class PostgresRabbitMQListener:
         END;
         $$ LANGUAGE plpgsql;
 
-        DROP TRIGGER IF EXISTS web_searcher_memory_insert_trigger ON {self.pg_schema}.{self.table_name};
-        CREATE TRIGGER web_searcher_memory_insert_trigger
+        DROP TRIGGER IF EXISTS {trigger_name} ON {self.pg_schema}.{self.table_name};
+        CREATE TRIGGER {trigger_name}
         AFTER INSERT ON {self.pg_schema}.{self.table_name}
-        FOR EACH ROW EXECUTE FUNCTION notify_web_searcher_memory_change();
+        FOR EACH ROW EXECUTE FUNCTION {function_name}();
         """
         pg_cursor.execute(trigger_function)
-        logger.info(f"Trigger créé pour la table {self.pg_schema}.{self.table_name}")
+        logger.info(f"Trigger {trigger_name} créé pour la table {self.pg_schema}.{self.table_name}")
 
     def create_rabbitmq_connection(self):
         """Créer une connexion RabbitMQ avec gestion des erreurs"""
