@@ -1,3 +1,5 @@
+# Répertoire actif : /Users/vinh/Documents/phidata-1
+
 # API de Recherche Web Intelligente
 
 ## Description
