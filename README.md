@@ -94,16 +94,18 @@ Le listener transforme automatiquement les payloads d'insertion :
 - RabbitMQ
 - Dépendances Python (voir `listeners/requirements.txt`)
 
-### Installation
-1. Construire l'image Docker
-```bash
-cd listeners
-docker build -t postgres-rabbitmq-listener:v1 .
-```
+### Déploiement
+Le déploiement se fait via le script `scripts/deploy.sh` qui automatise les étapes suivantes :
+1. Construction de l'image Docker
+2. Taggage de l'image
+3. Envoi de l'image vers le registry
+4. Préparation du VPS
+5. Import de l'image sur le cluster Kubernetes
+6. Redéploiement du pod
 
-2. Déployer avec Kubernetes
+Commande de déploiement :
 ```bash
-kubectl apply -f postgres-rabbitmq-listener-deployment.yaml
+./scripts/deploy.sh
 ```
 
 ### Surveillance
