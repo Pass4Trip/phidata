@@ -1,40 +1,66 @@
 # Répertoire actif : /Users/vinh/Documents/phidata-1
 
-# API de Recherche Web Intelligente
+# Architecture Multi-Agent avec Phidata
 
-## Description
-Cette API fournit un endpoint de recherche web intelligent qui peut répondre à diverses requêtes en utilisant DuckDuckGo et OpenAI.
+## Vue d'ensemble
 
-## Fonctionnalités
-- Recherche web en temps réel
-- Support des requêtes mathématiques
-- Support des requêtes conceptuelles
-- Réponses structurées et lisibles
+Ce projet implémente une architecture multi-agent flexible utilisant le framework Phidata. L'objectif est de créer un système intelligent capable de router et de traiter différents types de requêtes.
 
-## Endpoint
+## Agents Disponibles
 
-### `/web/search`
+### 1. Main Router Agent (`main_router_agent.py`)
+- **Rôle**: Analyser les requêtes utilisateur et router vers l'agent spécialisé approprié
+- **Capacités**: 
+  - Analyse sémantique de la demande
+  - Sélection dynamique de l'agent le plus adapté
+  - Possibilité d'étendre les capacités avec de nouveaux agents
 
-#### Paramètres
-- `query` (obligatoire) : La requête de recherche
-- `model_id` (optionnel) : ID du modèle OpenAI à utiliser
-- `user_id` (optionnel) : ID de l'utilisateur
-- `session_id` (optionnel) : ID de session
-- `max_retries` (optionnel, défaut: 2) : Nombre maximum de tentatives en cas d'échec
+### 2. Web Search Agent (`web.py`)
+- **Rôle**: Recherche d'informations sur le web
+- **Outils**: 
+  - DuckDuckGo Search
+  - Recherche d'informations actuelles et récentes
 
-#### Exemples de requêtes
+### 3. API Knowledge Agent (`api_knowledge.py`)
+- **Rôle**: Accès à des connaissances via des API
+- **Capacités**:
+  - Requêtes sur Wikipedia
+  - Extensible à d'autres sources de connaissances
 
-1. Calcul mathématique
+### 4. Data Analysis Agent (`data_analysis.py`)
+- **Rôle**: Analyse approfondie de jeux de données
+- **Capacités**:
+  - Chargement de fichiers CSV/Excel
+  - Analyse statistique
+  - Génération d'insights
+
+## Installation
+
 ```bash
-curl "http://localhost:8001/web/search?query=20%20*%2014"
-# Réponse : The result of 20 × 14 is 280
+# Installer les dépendances
+uv pip install .
 ```
 
-2. Requête conceptuelle
-```bash
-curl "http://localhost:8001/web/search?query=Qu%27est-ce%20que%20le%20holisme%20%3F"
-# Réponse : Une explication détaillée du holisme
+## Utilisation
+
+```python
+from agents.main_router_agent import process_user_request
+
+# Exemple de requête
+result = process_user_request("Trouve les dernières nouvelles sur l'IA")
 ```
+
+## Extensibilité
+
+L'architecture permet facilement d'ajouter de nouveaux agents spécialisés en suivant le modèle existant.
+
+## Dépendances
+
+- Phidata
+- OpenAI
+- DuckDuckGo Search
+- Pandas
+- NumPy
 
 ## Dépendances
 - FastAPI

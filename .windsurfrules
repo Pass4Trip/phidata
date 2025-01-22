@@ -6,3 +6,31 @@
 - Pour la base neo4j, postgreSQL et rabbitMQ, ils sont installé sur un serveur vps-ovh. j'y accède depuis mon pc avec ssh.
 - Pour te connecter au serveur vps-ovh, tu dois utiliser la commande ssh vps-ovh
 - Sur vps-ovh les installations sont faites avec microk8s.
+
+- selon le framework phidata, a chaque agent nous devons avoir :
+  - /Users/vinh/Documents/phidata-1/agents/web.py : le code de l'agent dont ci-dessous un exemple de code : /Users/vinh/Documents/phidata-1/agents/web.py
+  - /Users/vinh/Documents/phidata-1/api/routes/web.py : définit un endpoint FastAPI pour exposer l'agent de recherche web comme une API REST dont un exemple de code : /Users/vinh/Documents/phidata-1/api/routes/web.py
+
+Voici une synthèse pour créer un agent Phidata avec sa route :
+
+Création d'un Agent Phidata : 
+    1. Agent (agents/[nom_agent].py)
+    - Importer phi.agent.Agent
+    - Configurer le modèle (OpenAI)
+    - Définir des instructions
+    - Ajouter des outils si nécessaire
+    - Créer une fonction get_[nom_agent]_agent()
+    2. Route FastAPI (api/routes/[nom_agent].py)
+    - Créer un APIRouter
+    - Définir un endpoint (GET/POST)
+    - Importer l'agent depuis agents/
+    - Gérer les paramètres (query, user_id, etc.)
+    - Structurer la réponse avec un modèle Pydantic
+    3. Modifications dans api/routes/v1_router.py
+    - Importer la nouvelle route
+    - Ajouter v1_router.include_router()
+    4. Points clés
+    - Gestion des erreurs
+    - Logging
+    - Utilisation de variables d'environnement
+    - Stockage optionnel des sessions

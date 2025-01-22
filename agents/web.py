@@ -3,6 +3,7 @@ from phi.agent import Agent
 from phi.model.openai import OpenAIChat
 from phi.tools.duckduckgo import DuckDuckGo
 from agents.settings import agent_settings
+from duckduckgo_search.exceptions import DuckDuckGoSearchException
 import os
 import logging
 from dotenv import load_dotenv
@@ -10,19 +11,38 @@ from db.url import get_db_url
 from phi.storage.agent.postgres import PgAgentStorage
 from phi.agent import AgentMemory
 from phi.memory.db.postgres import PgMemoryDb
-from utils.logging import configure_logging
+from utils.colored_logging import get_colored_logger
 
 # Charger les variables d'environnement
 load_dotenv()
 
 # Configuration du logger
-configure_logging()
-logger = logging.getLogger(__name__)
+logger = get_colored_logger('agents.web', 'WebAgent', level=logging.DEBUG)
 
 db_url = get_db_url()
 
 web_searcher_storage = PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url)
 
+class EnhancedDuckDuckGoSearchTool(DuckDuckGo):
+    def duckduckgo_search(
+        self, 
+        query: str, 
+        max_results: int = 5
+    ) -> str:
+        """
+        Recherche web avec gestion des erreurs améliorée
+        """
+        try:
+            logger.info(f"Recherche web pour la requête : {query}")
+            results = super().duckduckgo_search(query=query, max_results=max_results)
+            logger.info(f"Résultats de recherche obtenus : {len(results)} résultats")
+            return results
+        except DuckDuckGoSearchException as e:
+            logger.error(f"Erreur lors de la recherche DuckDuckGo : {e}")
+            return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
+        except Exception as e:
+            logger.error(f"Erreur inattendue lors de la recherche : {e}")
+            return f"Erreur inattendue : {e}. Veuillez réessayer."
 
 def get_web_searcher(
     model_id: Optional[str] = None,
@@ -34,15 +54,12 @@ def get_web_searcher(
     if not os.getenv('OPENAI_API_KEY'):
         raise ValueError("La clé API OpenAI n'est pas définie. Veuillez définir OPENAI_API_KEY dans votre fichier .env.")
 
-    # Configurer le logging en mode DEBUG
-    configure_logging('DEBUG')
-
     # Récupérer l'URL de base de données (optionnel)
     if db_url:
         logger.info(f"URL de base de données configurée : {db_url}")
 
-    return Agent(
-        name="Web Searcher",
+    web_agent = Agent(
+        name="Web Search Agent",
         agent_id="web-searcher",
         session_id=session_id,
         user_id=user_id,
@@ -54,6 +71,10 @@ def get_web_searcher(
         ),
         role="Tu es un agent d'une Team qui dispose des capacités à rechercher des informations sur le Web. Tu dois renvoyer tes résultats à Agent Leader",  
         instructions=[
+            "Perform web searches to find the most relevant and up-to-date information",
+            "Always include sources for the information",
+            "Provide clear and concise summaries",
+            "",
             "Tu es un agent intelligent avec des capacités de recherche web.",
             "Utilise le moteur de recherche DuckDuckGo UNIQUEMENT si :",
             " - La réponse nécessite des informations actuelles ou récentes",
@@ -74,7 +95,7 @@ def get_web_searcher(
             "   * Citer les détails spécifiques de l'environnement ou des préférences",
             "   * Expliquer comment ces informations ont influencé ta réponse",
         ],
-        tools=[DuckDuckGo()],
+        tools=[EnhancedDuckDuckGoSearchTool()],
         add_datetime_to_instructions=True,
         markdown=True,
         # Show tool calls in the response
@@ -82,11 +103,22 @@ def get_web_searcher(
         # Enable monitoring on phidata.app
         monitoring=True,
         # Show debug logs
-        debug_mode=True,  # Passer à True pour activer les logs de débogage
+        debug_mode=debug_mode,
         # Store agent sessions in the database
         storage=web_searcher_storage,
 
         memory=AgentMemory(
-        db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url), create_user_memories=True, create_session_summary=True),
-
+            db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url), 
+            create_user_memories=True, 
+            create_session_summary=True
+        ),
+        stream=False,  # Désactiver le streaming
     )
+
+    def web_search(query):
+        """
+        Méthode utilitaire pour effectuer une recherche web
+        """
+        return web_agent.print_response(query, stream=False)
+
+    return web_agent

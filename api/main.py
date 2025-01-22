@@ -38,3 +38,5 @@ def create_app() -> FastAPI:
 
 # Create FastAPI app
 app = create_app()
+
+__all__ = ["app"]
