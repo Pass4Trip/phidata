@@ -64,11 +64,11 @@ def create_agent_team(
         raise ValueError("La clé API OpenAI n'est pas définie. Veuillez définir OPENAI_API_KEY dans votre fichier .env.")
 
     # Configurer le logging en mode DEBUG
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Récupérer l'URL de base de données (optionnel)
     if db_url:
-        logger.info(f"URL de base de données configurée : {db_url}")
+        logger.debug(f"URL de base de données configurée : {db_url}")
 
     # Créer les agents spécialisés
     web_agent = get_web_searcher(
@@ -116,6 +116,7 @@ def create_agent_team(
         markdown=True,
         stream=False  # Désactiver le streaming
     )
+    logger.info("🔀 Agent Routeur Principal prêt à coordonner les requêtes")
 
     # Créer l'équipe d'agents
     agent_team = Agent(
@@ -167,8 +168,8 @@ def process_user_request(
         response = agent_team.run(user_request, stream=False)
         
         # Log détaillé du type de réponse
-        logger.debug(f"Type de réponse reçue : {type(response)}")
-        logger.debug(f"Contenu de la réponse : {response}")
+        #logger.debug(f"Type de réponse reçue : {type(response)}")
+        #logger.debug(f"Contenu de la réponse : {response}")
         
         # Vérifier et convertir la réponse
         if response is None:

@@ -19,7 +19,7 @@ from typing import Optional, Dict, Any, List
 load_dotenv()
 
 # Configuration du logger
-logger = get_colored_logger('agents.api_knowledge', 'APIKnowledgeAgent', level=logging.DEBUG)
+logger = get_colored_logger('agents.api_knowledge', 'APIKnowledgeAgent', level=logging.INFO)
 
 db_url = get_db_url()
 
@@ -50,6 +50,10 @@ def sync_query_lightrag_api(
     Returns:
         str: Texte de réponse de la requête
     """
+
+    # Log coloré pour indiquer la prise en charge de la demande
+    logger.info("📚 Agent Connaissance API prêt à interroger les bases de connaissances")
+    
     # Utiliser une liste vide par défaut si vdb_filter est None
     if vdb_filter is None:
         vdb_filter = []
@@ -78,7 +82,7 @@ def sync_query_lightrag_api(
             
             # Log détaillé de la requête
             logger.info(f" Requête LightRAG - Question : {question}")
-            logger.info(f" Paramètres de requête : {payload}")
+            logger.debug(f" Paramètres de requête : {payload}")
             
             try:
                 response = client.post(
@@ -87,18 +91,18 @@ def sync_query_lightrag_api(
                 )
                 
                 # Log détaillé de la réponse
-                logger.info(f" Requête HTTP: {response.request.method} {response.request.url}")
-                logger.info(f" Réponse HTTP: {response.status_code} {response.reason_phrase}")
+                logger.debug(f" Requête HTTP: {response.request.method} {response.request.url}")
+                logger.debug(f" Réponse HTTP: {response.status_code} {response.reason_phrase}")
                 
                 # Récupérer et log du contenu de la réponse
                 response_content = response.json()
-                logger.info(f" Contenu de la réponse : {response_content}")
+                logger.debug(f" Contenu de la réponse : {response_content}")
                 
                 if response.status_code == 200 and response_content.get('status') == 'success':
                     # Extraire et retourner la réponse textuelle
                     response_text = response_content.get('response', 'Aucune réponse disponible')
                     
-                    logger.info(f" Réponse extraite : {response_text}")
+                    logger.debug(f" Réponse extraite : {response_text}")
                     return response_text
                 else:
                     logger.error(f" Échec de la requête : {response.status_code} - {response.text}")
@@ -129,6 +133,12 @@ def get_api_knowledge_agent(
     from phi.model.openai import OpenAIChat
     from phi.tools.python import PythonTools
     from agents.settings import agent_settings
+
+    # Récupérer l'URL de base de données (optionnel)
+    if db_url:
+        logger.debug(f"URL de base de données configurée : {db_url}")
+
+
 
     # Créer l'agent de connaissance
     api_knowledge_agent = Agent(

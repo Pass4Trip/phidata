@@ -1,9 +1,8 @@
 from typing import Optional
 from phi.agent import Agent
 from phi.model.openai import OpenAIChat
-from phi.tools.duckduckgo import DuckDuckGo
+from phi.tools.googlesearch import GoogleSearch
 from agents.settings import agent_settings
-from duckduckgo_search.exceptions import DuckDuckGoSearchException
 import os
 import logging
 from dotenv import load_dotenv
@@ -17,35 +16,41 @@ from utils.colored_logging import get_colored_logger
 load_dotenv()
 
 # Configuration du logger
-logger = get_colored_logger('agents.web', 'WebAgent', level=logging.DEBUG)
+logger = get_colored_logger('agents.web', 'WebAgent', level=logging.INFO)
 
 db_url = get_db_url()
 
 web_searcher_storage = PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url)
 
-class EnhancedDuckDuckGoSearchTool(DuckDuckGo):
-    def duckduckgo_search(
+class EnhancedWebSearchTool(GoogleSearch):
+    """
+    Outil de recherche web amélioré basé sur Google Search
+    """
+    def web_search(
         self, 
         query: str, 
-        max_results: int = 5
+        max_results: int = 5,
+        language: str = 'en'
     ) -> str:
         """
         Recherche web avec gestion des erreurs améliorée
         """
+        # Log coloré pour indiquer la prise en charge de la demande
+        logger.info("🌐 Agent Web prêt à traiter les requêtes de recherche web")
+        
         try:
             logger.info(f"Recherche web pour la requête : {query}")
-            results = super().duckduckgo_search(query=query, max_results=max_results)
-            logger.info(f"Résultats de recherche obtenus : {len(results)} résultats")
+            results = self.google_search(query=query, max_results=max_results, language=language)
+            logger.debug(f"Résultats de recherche obtenus : {len(results)} résultats")
             return results
-        except DuckDuckGoSearchException as e:
-            logger.error(f"Erreur lors de la recherche DuckDuckGo : {e}")
-            return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
         except Exception as e:
-            logger.error(f"Erreur inattendue lors de la recherche : {e}")
-            return f"Erreur inattendue : {e}. Veuillez réessayer."
+            logger.error(f"Erreur lors de la recherche web : {e}")
+            return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
 
 def get_web_searcher(
     model_id: Optional[str] = None,
+    storage: Optional[PgAgentStorage] = web_searcher_storage,
+    memory: Optional[AgentMemory] = None,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     debug_mode: bool = False,
@@ -56,7 +61,7 @@ def get_web_searcher(
 
     # Récupérer l'URL de base de données (optionnel)
     if db_url:
-        logger.info(f"URL de base de données configurée : {db_url}")
+        logger.debug(f"URL de base de données configurée : {db_url}")
 
     web_agent = Agent(
         name="Web Search Agent",
@@ -76,7 +81,7 @@ def get_web_searcher(
             "Provide clear and concise summaries",
             "",
             "Tu es un agent intelligent avec des capacités de recherche web.",
-            "Utilise le moteur de recherche DuckDuckGo UNIQUEMENT si :",
+            "Utilise le moteur de recherche Google UNIQUEMENT si :",
             " - La réponse nécessite des informations actuelles ou récentes",
             " - La question demande explicitement une recherche web",
             " - Tes connaissances actuelles sont insuffisantes pour répondre précisément",
@@ -95,7 +100,7 @@ def get_web_searcher(
             "   * Citer les détails spécifiques de l'environnement ou des préférences",
             "   * Expliquer comment ces informations ont influencé ta réponse",
         ],
-        tools=[EnhancedDuckDuckGoSearchTool()],
+        tools=[EnhancedWebSearchTool()],
         add_datetime_to_instructions=True,
         markdown=True,
         # Show tool calls in the response
@@ -105,7 +110,7 @@ def get_web_searcher(
         # Show debug logs
         debug_mode=debug_mode,
         # Store agent sessions in the database
-        storage=web_searcher_storage,
+        storage=storage,
 
         memory=AgentMemory(
             db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url), 

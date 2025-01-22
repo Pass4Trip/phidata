@@ -35,11 +35,13 @@ def get_data_analysis_agent(
         raise ValueError("La clé API OpenAI n'est pas définie. Veuillez définir OPENAI_API_KEY dans votre fichier .env.")
 
     # Configurer le logging en mode DEBUG
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Récupérer l'URL de base de données (optionnel)
     if db_url:
-        logger.info(f"URL de base de données configurée : {db_url}")
+        logger.debug(f"URL de base de données configurée : {db_url}")
+
+
 
     def load_dataframe(file_path):
         """
