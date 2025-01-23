@@ -32,7 +32,7 @@ except ImportError:
 
 
 class OpenAIChat(LLM):
-    model: str = "gpt-4o"
+    model: str = "gpt-4o-mini"
     name: str = "OpenAIChat"
     provider: str = "OpenAI"
     # -*- Request parameters

@@ -1,130 +1,81 @@
-from typing import Optional
-from phi.agent import Agent
-from phi.model.openai import OpenAIChat
-from phi.tools.duckduckgo import DuckDuckGo
-from agents.settings import agent_settings
+from typing import Optional, Any, Dict, Callable
 import os
 import logging
 from dotenv import load_dotenv
-from db.url import get_db_url
+from phi.agent import Agent
+from phi.llm.openai.chat import OpenAIChat
 from phi.storage.agent.postgres import PgAgentStorage
-from phi.agent import AgentMemory
-from phi.memory.db.postgres import PgMemoryDb
-from utils.colored_logging import get_colored_logger
+import json
+from datetime import datetime, timedelta
 
+# Importer les nouveaux outils de recherche
+from llm_axe.models import OpenAIChat
+from llm_axe.agents import OnlineAgent
 
 # Charger les variables d'environnement
 load_dotenv()
 
-# Configuration du logger
-logger = get_colored_logger('agents.web', 'WebAgent', level=logging.INFO)
+# Configuration du logging
+logger = logging.getLogger(__name__)
 
-db_url = get_db_url()
-
-web_searcher_storage = PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url)
-
-class EnhancedWebSearchTool:
-    """
-    Outil de recherche web amélioré basé sur Google Search
-    """
-    # def web_search(
-    #     self, 
-    #     query: str, 
-    #     max_results: int = 5,
-    #     language: str = 'en'
-    # ) -> str:
-    #     """
-    #     Recherche web avec gestion des erreurs améliorée
-    #     """
-    #     # Log coloré pour indiquer la prise en charge de la demande
-    #     logger.info("🌐 Agent Web prêt à traiter les requêtes de recherche web")
-        
-    #     try:
-    #         logger.info(f"Recherche web pour la requête : {query}")
-    #         results = self.google_search(query=query, max_results=max_results, language=language)
-    #         logger.debug(f"Résultats de recherche obtenus : {len(results)} résultats")
-    #         return results
-    #     except Exception as e:
-    #         logger.error(f"Erreur lors de la recherche web : {e}")
-    #         return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
 
 def get_web_searcher(
-    model_id: Optional[str] = None,
-    storage: Optional[PgAgentStorage] = web_searcher_storage,
-    memory: Optional[AgentMemory] = None,
+    model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     debug_mode: bool = False,
+    stream: bool = False,
+    **kwargs
 ) -> Agent:
-    # Vérifier si la clé API est définie
-    if not os.getenv('OPENAI_API_KEY'):
-        raise ValueError("La clé API OpenAI n'est pas définie. Veuillez définir OPENAI_API_KEY dans votre fichier .env.")
+    """
+    Crée un agent de recherche web utilisant llm-axe OnlineAgent.
+    
+    Args:
+        model_id (str): L'identifiant du modèle OpenAI à utiliser.
+        user_id (Optional[str]): L'identifiant de l'utilisateur.
+        session_id (Optional[str]): L'identifiant de session.
+        debug_mode (bool): Mode de débogage activé.
+    
+    Returns:
+        Agent: Un agent de recherche web configuré.
+    """
 
-    # Récupérer l'URL de base de données (optionnel)
-    if db_url:
-        logger.debug(f"URL de base de données configurée : {db_url}")
+    # Créer un outil de recherche web personnalisé
+    def web_search_tool(query: str = "web search"):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("Clé API OpenAI manquante. Veuillez la définir dans le fichier .env")
 
+        llm = OpenAIChat(api_key=api_key)
+        searcher = OnlineAgent(llm)
+        res = searcher.search(query)
+
+        json_res = []
+        json_res.append(res)
+        return json.dumps(json_res) 
+
+    # Créer l'agent Phidata
     web_agent = Agent(
-        name="Web Search Agent",
-        agent_id="web-searcher",
-        session_id=session_id,
-        user_id=user_id,
-        # The model to use for the agent
-        model=OpenAIChat(
-            id=model_id or agent_settings.gpt_4,
-            max_tokens=agent_settings.default_max_completion_tokens,
-            temperature=agent_settings.default_temperature,
-        ),
-        role="Tu es un agent d'une Team qui dispose des capacités à rechercher des informations sur le Web. Tu dois renvoyer tes résultats à Agent Leader",  
+        tools=[web_search_tool],
         instructions=[
-            "Perform web searches to find the most relevant and up-to-date information",
-            "Always include sources for the information",
-            "Provide clear and concise summaries",
-            "",
-            "Tu es un agent intelligent avec des capacités de recherche web.",
-            "Utilise le moteur de recherche Google UNIQUEMENT si :",
-            " - La réponse nécessite des informations actuelles ou récentes",
-            " - La question demande explicitement une recherche web",
-            " - Tes connaissances actuelles sont insuffisantes pour répondre précisément",
-            "",
-            "Étapes de résolution :",
-            "1. Évalue d'abord si une recherche web est vraiment nécessaire",
-            "2. Si oui, décompose la question en requêtes de recherche pertinentes",
-            "3. Analyse les résultats avec esprit critique",
-            "",
-            "Règles importantes :",
-            " - Privilégie toujours la qualité et la précision des sources",
-            " - Si aucune information pertinente n'est trouvée, explique-le clairement",
-            " - Garde tes réponses concises et instructives",
-            " - En cas d'échec de recherche, utilise tes connaissances existantes",
-            " - TOUJOURS mentionner explicitement les informations de contexte utilisateur utilisées",
-            "   * Citer les détails spécifiques de l'environnement ou des préférences",
-            "   * Expliquer comment ces informations ont influencé ta réponse",
+            "Tu es un agent de recherche web intelligent.",
+            "Pour effectuer des recherches sur le web, tu dois TOUJOURS utiliser l'outil web_search_tool.",
+            "Ton objectif est de trouver des informations précises et pertinentes.",
+            "Voici comment procéder:",
+            "1. Reçois une requête de recherche",
+            "2. Si la requête contient des références temporelles relatives (ex: 'demain', 'dans une semaine', 'hier'):",
+            "   - Utilise la date actuelle (" + datetime.now().strftime("%Y-%m-%d") + ") comme référence",
+            "   - Convertis ces références en dates précises avant d'effectuer la recherche",
+            "   - Exemple: 'événements de demain' -> 'événements du " + (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d") + "'",
+            "3. Utilise web_search_tool avec cette requête pour accéder au web",
+            "4. Analyse les résultats retournés par web_search_tool",
+            "5. Fournis une réponse concise et informative basée sur ces résultats",
+            "Si tu ne trouves pas d'informations via web_search_tool, explique pourquoi."
         ],
-        tools=[DuckDuckGo()],
-        add_datetime_to_instructions=True,
-        markdown=True,
-        # Show tool calls in the response
-        show_tool_calls=True,
-        # Enable monitoring on phidata.app
-        monitoring=True,
-        # Show debug logs
         debug_mode=debug_mode,
-        # Store agent sessions in the database
-        storage=storage,
-
-        memory=AgentMemory(
-            db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url), 
-            create_user_memories=True, 
-            create_session_summary=True
-        ),
-        stream=False,  # Désactiver le streaming
+        user_id=user_id,
+        session_id=session_id,
+        name="Web Search Agent"  # Nom explicite
     )
-
-    def web_search(query):
-        """
-        Méthode utilitaire pour effectuer une recherche web
-        """
-        return web_agent.run(query, stream=False)
 
     return web_agent

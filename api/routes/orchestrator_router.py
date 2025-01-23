@@ -48,48 +48,44 @@ async def route_and_process_request(
 ) -> OrchestratorResponse:
     """
     Endpoint pour router et traiter une requête utilisateur via l'agent principal.
-    
-    Args:
-        query (str): La requête de l'utilisateur
-        user_id (Optional[str]): ID de l'utilisateur
-        session_id (Optional[str]): ID de session
-        debug_mode (bool): Mode de débogage
-    
-    Returns:
-        OrchestratorResponse: Réponse structurée du traitement de la requête
     """
     try:
-        # Traiter la requête avec l'agent routeur principal
+        # Traiter la requête via l'orchestrateur
         result = await process_user_request(
             user_request=query,
-            user_id=user_id,
-            session_id=session_id,
             debug_mode=debug_mode
         )
         
-        # Convertir le résultat si nécessaire
-        if isinstance(result, dict):
-            result = str(result)
-        elif isinstance(result, list):
-            result = "\n".join(map(str, result))
+        # Gérer les résultats None ou vides
+        result_value = result.get('result', '')
+        if result_value is None:
+            result_value = ''
         
-        # Nettoyer et structurer la réponse
-        cleaned_result = clean_response(str(result)) if result is not None else "Aucun résultat"
+        # Nettoyer la réponse si c'est une chaîne
+        if isinstance(result_value, str):
+            result_value = clean_response(result_value)
+        elif isinstance(result_value, (list, dict)):
+            result_value = str(result_value)
         
         return OrchestratorResponse(
             query=query,
-            result=cleaned_result,
-            agent_used="Multi-Purpose Intelligence Team",
+            result=result_value,
+            agent_used=result.get('agent_used', 'Multi-Purpose Intelligence Team'),
             metadata={
-                "debug_mode": debug_mode,
-                "user_id": user_id,
-                "session_id": session_id
+                'user_id': user_id,
+                'session_id': session_id,
+                **result.get('metadata', {})
             }
         )
-    
+        
     except Exception as e:
-        logger.error(f"Erreur lors du traitement de la requête : {e}")
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Erreur lors du traitement : {str(e)}"
+        logger.exception(f"Erreur lors du traitement de la requête : {e}")
+        return OrchestratorResponse(
+            query=query,
+            result="",
+            error=str(e),
+            metadata={
+                'user_id': user_id,
+                'session_id': session_id
+            }
         )

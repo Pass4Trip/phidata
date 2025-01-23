@@ -12,7 +12,6 @@ from phi.agent import AgentMemory
 from phi.memory.db.postgres import PgMemoryDb
 from utils.colored_logging import get_colored_logger
 import httpx
-import logging
 from typing import Optional, Dict, Any, List
 
 # Charger les variables d'environnement

@@ -146,3 +146,84 @@ Format de réponse REQUIS:
     "confidence_level": "élevée/moyenne/faible"
 }}
 """
+
+TASK_DECOMPOSITION_PROMPT = """
+Décompose la tâche suivante en sous-tâches plus petites et gérables.
+
+Tâche principale : {task}
+
+Instructions:
+1. Analyse la tâche en détail
+2. Identifie les sous-tâches nécessaires
+3. Attribue une priorité à chaque sous-tâche
+4. Suggère l'agent le plus approprié pour chaque sous-tâche
+
+Format de réponse :
+```json
+{
+    "sub_tasks": [
+        {
+            "description": "Description de la sous-tâche",
+            "priority": "haute|moyenne|basse",
+            "agent": "Nom de l'agent suggéré",
+            "reasoning": "Justification du choix de l'agent"
+        }
+    ]
+}
+```
+"""
+
+AGENT_ROUTING_PROMPT = """
+Sélectionne l'agent le plus approprié pour la tâche suivante.
+
+Tâche : {task}
+
+Agents disponibles :
+{agents_description}
+
+Historique de performance des agents :
+{performance_history}
+
+Critères de sélection :
+1. Correspondance des compétences avec la tâche
+2. Historique de performance
+3. Complexité de la tâche
+4. Spécialisation de l'agent
+
+Format de réponse :
+```json
+{
+    "selected_agent": "Nom de l'agent sélectionné",
+    "confidence_score": 0.95,
+    "reasoning": "Explication détaillée du choix",
+    "fallback_agent": "Nom de l'agent alternatif",
+    "task_complexity": "simple|moyenne|complexe"
+}
+```
+"""
+
+TASK_CONTEXT_PROMPT = """
+Analyse le contexte de la tâche pour améliorer la sélection de l'agent.
+
+Tâche : {task}
+Contexte actuel : {context}
+Historique des tâches : {task_history}
+
+Instructions :
+1. Identifie les patterns et dépendances
+2. Évalue la continuité avec les tâches précédentes
+3. Détermine les contraintes et prérequis
+
+Format de réponse :
+```json
+{
+    "context_analysis": {
+        "patterns": ["pattern1", "pattern2"],
+        "dependencies": ["dep1", "dep2"],
+        "constraints": ["constraint1", "constraint2"]
+    },
+    "recommended_approach": "Description de l'approche recommandée",
+    "critical_considerations": ["consideration1", "consideration2"]
+}
+```
+"""
