@@ -11,7 +11,7 @@ try:
     from api.routes.web import web_router
     from api.routes.api_knowledge import api_knowledge_router
     from api.routes.data_analysis import data_analysis_router
-    from api.routes.main_router import main_router_api
+    from api.routes.orchestrator_router import orchestrator_router
 except ImportError as e:
     logger.error(f"Erreur d'importation des routes : {e}")
     logger.error(traceback.format_exc())
@@ -20,7 +20,7 @@ except ImportError as e:
     web_router = APIRouter()
     api_knowledge_router = APIRouter()
     data_analysis_router = APIRouter()
-    main_router_api = APIRouter()
+    orchestrator_router = APIRouter()
 
 # Créer le routeur principal V1
 v1_router = APIRouter(prefix="/v1")
@@ -29,6 +29,6 @@ v1_router = APIRouter(prefix="/v1")
 v1_router.include_router(web_router, prefix="/web", tags=["Web Search"])
 v1_router.include_router(api_knowledge_router, prefix="/knowledge", tags=["API Knowledge"])
 v1_router.include_router(data_analysis_router, prefix="/data", tags=["Data Analysis"])
-v1_router.include_router(main_router_api, prefix="/router", tags=["Main Router"])
+v1_router.include_router(orchestrator_router, prefix="/router", tags=["Orchestrator"])
 
 logger.info("Routes V1 initialisées avec succès")

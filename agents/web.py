@@ -1,7 +1,7 @@
 from typing import Optional
 from phi.agent import Agent
 from phi.model.openai import OpenAIChat
-from phi.tools.googlesearch import GoogleSearch
+from phi.tools.duckduckgo import DuckDuckGo
 from agents.settings import agent_settings
 import os
 import logging
@@ -11,6 +11,7 @@ from phi.storage.agent.postgres import PgAgentStorage
 from phi.agent import AgentMemory
 from phi.memory.db.postgres import PgMemoryDb
 from utils.colored_logging import get_colored_logger
+
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -22,30 +23,30 @@ db_url = get_db_url()
 
 web_searcher_storage = PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url)
 
-class EnhancedWebSearchTool(GoogleSearch):
+class EnhancedWebSearchTool:
     """
     Outil de recherche web amélioré basé sur Google Search
     """
-    def web_search(
-        self, 
-        query: str, 
-        max_results: int = 5,
-        language: str = 'en'
-    ) -> str:
-        """
-        Recherche web avec gestion des erreurs améliorée
-        """
-        # Log coloré pour indiquer la prise en charge de la demande
-        logger.info("🌐 Agent Web prêt à traiter les requêtes de recherche web")
+    # def web_search(
+    #     self, 
+    #     query: str, 
+    #     max_results: int = 5,
+    #     language: str = 'en'
+    # ) -> str:
+    #     """
+    #     Recherche web avec gestion des erreurs améliorée
+    #     """
+    #     # Log coloré pour indiquer la prise en charge de la demande
+    #     logger.info("🌐 Agent Web prêt à traiter les requêtes de recherche web")
         
-        try:
-            logger.info(f"Recherche web pour la requête : {query}")
-            results = self.google_search(query=query, max_results=max_results, language=language)
-            logger.debug(f"Résultats de recherche obtenus : {len(results)} résultats")
-            return results
-        except Exception as e:
-            logger.error(f"Erreur lors de la recherche web : {e}")
-            return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
+    #     try:
+    #         logger.info(f"Recherche web pour la requête : {query}")
+    #         results = self.google_search(query=query, max_results=max_results, language=language)
+    #         logger.debug(f"Résultats de recherche obtenus : {len(results)} résultats")
+    #         return results
+    #     except Exception as e:
+    #         logger.error(f"Erreur lors de la recherche web : {e}")
+    #         return f"Erreur de recherche : {e}. Impossible de récupérer les résultats."
 
 def get_web_searcher(
     model_id: Optional[str] = None,
@@ -100,7 +101,7 @@ def get_web_searcher(
             "   * Citer les détails spécifiques de l'environnement ou des préférences",
             "   * Expliquer comment ces informations ont influencé ta réponse",
         ],
-        tools=[EnhancedWebSearchTool()],
+        tools=[DuckDuckGo()],
         add_datetime_to_instructions=True,
         markdown=True,
         # Show tool calls in the response
@@ -124,6 +125,6 @@ def get_web_searcher(
         """
         Méthode utilitaire pour effectuer une recherche web
         """
-        return web_agent.print_response(query, stream=False)
+        return web_agent.run(query, stream=False)
 
     return web_agent

@@ -73,7 +73,7 @@ L'architecture permet facilement d'ajouter de nouveaux agents spécialisés en s
 
 ## Démarrage
 ```bash
-uvicorn app:app --reload --port 8001
+cd /Users/vinh/Documents/phidata-1 && uv pip install . && uvicorn api.main:app --reload --port 8001
 ```
 
 ## Listener PostgreSQL-RabbitMQ

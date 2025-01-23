@@ -48,6 +48,8 @@ dependencies = [
   "numpy",
   "openpyxl",
   "requests",
+  "colorama",  # Ajout de colorama pour le logging coloré
+  "python-multipart",  # Ajout pour la gestion des données de formulaire
 ]
 
 [project.optional-dependencies]

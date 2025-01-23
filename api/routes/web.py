@@ -81,7 +81,7 @@ async def web_search(
                 result_str = str(result)
             
             # Nettoyer la réponse
-            result_str = clean_response(result_str)
+            #result_str = clean_response(result_str)
             
             return result_str
         

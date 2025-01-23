@@ -11,7 +11,8 @@ AGENT_COLORS = {
     'WebAgent': Fore.GREEN,
     'APIKnowledgeAgent': Fore.MAGENTA,
     'DataAnalysisAgent': Fore.YELLOW,
-    'DefaultAgent': Fore.WHITE
+    'DefaultAgent': Fore.WHITE,
+    'Orchestrator': Fore.CYAN
 }
 
 class ColoredFormatter(logging.Formatter):
@@ -72,7 +73,7 @@ def demo_logging():
     """
     Démonstration de l'utilisation du logging coloré
     """
-    main_logger = get_colored_logger('agents.main_router_agent', 'MainRouterAgent')
+    main_logger = get_colored_logger('agents.orchestrator', 'Orchestrator')
     web_logger = get_colored_logger('agents.web', 'WebAgent')
     api_logger = get_colored_logger('agents.api_knowledge', 'APIKnowledgeAgent')
     
