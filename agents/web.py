@@ -47,11 +47,12 @@ def get_web_searcher(
             raise ValueError("Clé API OpenAI manquante. Veuillez la définir dans le fichier .env")
 
         llm = OpenAIChat(api_key=api_key)
-        searcher = OnlineAgent(llm)
+        searcher = OnlineAgent(llm, stream=False)
         res = searcher.search(query)
 
         json_res = []
         json_res.append(res)
+        
         return json.dumps(json_res) 
 
     # Créer l'agent Phidata
@@ -75,7 +76,8 @@ def get_web_searcher(
         debug_mode=debug_mode,
         user_id=user_id,
         session_id=session_id,
-        name="Web Search Agent"  # Nom explicite
+        name="Web Search Agent",
+        stream=False
     )
 
     return web_agent

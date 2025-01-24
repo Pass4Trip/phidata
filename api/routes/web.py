@@ -34,13 +34,25 @@ async def web_search(
             model_id=model_id, 
             user_id=user_id, 
             session_id=session_id,
-            debug_mode=True
+            debug_mode=False,
+            stream=False
         )
         
         # Utiliser l'agent pour effectuer la recherche
         try:
-            result = web_searcher.run(query)
+            result = web_searcher.run(query, stream=False)
+            
+            # Extraction du contenu entre content="..."
+            import re
+            content_match = re.search(r'content="(.*?)"', str(result))
+            if content_match:
+                result = content_match.group(1)
+            
             logger.info(f"Résultats de recherche obtenus : {result}")
+            
+
+
+            
         except Exception as search_error:
             logger.error(f"Erreur lors de la recherche : {search_error}")
             result = f"Erreur de recherche : {search_error}"

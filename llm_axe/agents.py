@@ -1,9 +1,11 @@
 import warnings
 import os
 import json
+import logging
 
 from llm_axe.core import AgentType, safe_read_json, generate_schema, get_yaml_prompt, internet_search, read_website, read_pdf, make_prompt, llm_has_ask, stream_and_record
 
+logger = logging.getLogger(__name__)
 
 class Agent:
     """
@@ -581,15 +583,15 @@ class OnlineAgent:
         url_picker_prompts.append(url_picker_prompt)
 
         resp = self.llm.ask(url_picker_prompts, format="json", temperature=self.temperature, **self.llm_options)
-        resp_json = safe_read_json(resp)
+        response_json = safe_read_json(resp)
 
         self.chat_history.append(url_picker_prompt)
         self.chat_history.append(make_prompt("assistant", resp))
 
         # Check if the response is a valid url
         url = None
-        if resp_json is not None and "url" in resp_json:
-            url = resp_json["url"]
+        if response_json is not None and "url" in response_json:
+            url = response_json["url"]
         else:
             warnings.warn("LLM did not respond with valid url or json response.")
             return None
@@ -615,6 +617,7 @@ class OnlineAgent:
             return stream_and_record(response, self.chat_history)
 
         self.chat_history.append(make_prompt("assistant", response))
+        
         return response
 
     def get_search_query(self, question):

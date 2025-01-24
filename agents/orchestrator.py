@@ -815,6 +815,11 @@ class OrchestratorAgent:
         if not needs_decomposition:
             # Ajouter directement la tâche au registre
             self.task_ledger.add_task(user_request)
+            logger.info(f"""
+Task Ledger généré :
+    - Requête utilisateur : {user_request}
+    - Nombre de sous-tâches : 1
+""")
             return self.task_ledger
         
         # 3. Logique existante de décomposition avec function calling
@@ -842,6 +847,14 @@ class OrchestratorAgent:
                     f"Sous-tâche identifiée : {subtask['task']}", 
                     fact_type="derived"
                 )
+            
+            logger.info(f"""
+                Task Ledger généré :
+                - Requête utilisateur : {user_request}
+                - Nombre de sous-tâches : {len(decomposition)}
+                - Détail des sous-tâches :
+                {json.dumps(decomposition, indent=2)}
+                """)
             
             return self.task_ledger
         
