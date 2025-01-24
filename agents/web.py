@@ -3,13 +3,12 @@ import os
 import logging
 from dotenv import load_dotenv
 from phi.agent import Agent
-from phi.llm.openai.chat import OpenAIChat
 from phi.storage.agent.postgres import PgAgentStorage
 import json
 from datetime import datetime, timedelta
 
 # Importer les nouveaux outils de recherche
-from llm_axe.models import OpenAIChat
+from llm_axe.models import llm_axe_OpenAIChat
 from llm_axe.agents import OnlineAgent
 
 # Charger les variables d'environnement
@@ -41,12 +40,12 @@ def get_web_searcher(
     """
 
     # Créer un outil de recherche web personnalisé
-    def web_search_tool(query: str = "web search"):
+    def web_search_tool(query: str):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("Clé API OpenAI manquante. Veuillez la définir dans le fichier .env")
 
-        llm = OpenAIChat(api_key=api_key)
+        llm = llm_axe_OpenAIChat(api_key=api_key)
         searcher = OnlineAgent(llm, stream=False)
         res = searcher.search(query)
 

@@ -4,7 +4,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from agents.web import get_web_searcher
+# Import du lazy_import personnalisé
+from api.lazy_imports import get_web_searcher
 
 # Configurer le logging
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ async def web_search(
     logger.info(f"Recherche web: query='{query}', user_id='{user_id}'")
     
     try:
+        # L'import ne se fait qu'à ce moment-là
         web_searcher = get_web_searcher(
             model_id=model_id, 
             user_id=user_id, 
@@ -49,9 +51,6 @@ async def web_search(
                 result = content_match.group(1)
             
             logger.info(f"Résultats de recherche obtenus : {result}")
-            
-
-
             
         except Exception as search_error:
             logger.error(f"Erreur lors de la recherche : {search_error}")

@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
+import time
+import logging
 
 from api.settings import api_settings
 from api.routes.v1_router import v1_router
 
+logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     """Create a FastAPI App
@@ -11,6 +14,8 @@ def create_app() -> FastAPI:
     Returns:
         FastAPI: FastAPI App
     """
+    start_time = time.time()
+    logger.info("Début de l'initialisation de l'application")
 
     # Create FastAPI App
     app: FastAPI = FastAPI(
@@ -32,6 +37,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    end_time = time.time()
+    logger.info(f"Initialisation de l'application terminée en {end_time - start_time:.2f} secondes")
 
     return app
 
