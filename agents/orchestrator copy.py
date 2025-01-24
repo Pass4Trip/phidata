@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import re
 import traceback
@@ -486,311 +486,42 @@ class OrchestratorAgent:
                     {
                         "role": "system", 
                         "content": """
-                        Tu es un expert en analyse de tâches complexes.
+                        Tu es un expert en analyse de tâches complexes. 
+                        Détermine avec précision si la tâche requiert une décomposition.
                         
-                        CRITÈRES DE DÉCOMPOSITION :
-                        - La tâche nécessite-t-elle vraiment d'être divisée ?
-                        - Présente-t-elle plusieurs dimensions ou étapes ?
-                        - Requiert-elle différentes compétences ou approches ?
+                        Critères stricts de décomposition :
+                        - Tâche impliquant plus de 2 étapes distinctes
+                        - Nécessité de compétences variées
+                        - Besoin de planification stratégique
+                        - Tâche nécessitant recherche et analyse
                         
-                        NE PAS DÉCOMPOSER pour :
-                        - Requêtes simples et directes
-                        - Tâches ne nécessitant qu'une seule action
-                        - Demandes courtes et précises
-                        
-                        DÉCOMPOSER pour :
-                        - Projets multi-étapes
-                        - Tâches nécessitant planification
-                        - Requêtes complexes avec plusieurs objectifs
-                        
-                        Réponds par "OUI" ou "NON" avec discernement
+                        Règles de décision :
+                        - Réponds UNIQUEMENT par "OUI" ou "NON"
+                        - Sois strict et précis
+                        - Considère la complexité et la multi-dimensionnalité
                         """
                     },
                     {
                         "role": "user", 
-                        "content": f"Analyse cette requête : {user_request}"
+                        "content": f"Analyse si cette tâche nécessite une décomposition : {user_request}"
                     }
                 ],
-                max_tokens=10,
-                temperature=0.2
+                max_tokens=10,  # Forcer une réponse courte
+                temperature=0.2  # Réponse déterministe
             )
             
+            # Extraction de la décision
             llm_decision = response.choices[0].message.content.strip().upper()
+            
+            # Journalisation de la décision
             logger.info(f"Décision de décomposition pour '{user_request}': {llm_decision}")
             
             return llm_decision == "OUI"
         
         except Exception as e:
+            # Gestion d'erreur avec décision par défaut
             logger.error(f"Erreur lors de la décision de décomposition : {e}")
-            return False
-
-    def _select_best_agent(self, task: str) -> Agent:
-        """
-        Sélectionner l'agent le plus approprié avec function calling
-        
-        Args:
-            task (str): Tâche à exécuter
-        
-        Returns:
-            Agent: Agent sélectionné
-        """
-        try:
-            # Vérifier si le client est initialisé
-            if self.client is None:
-                logger.warning("Client OpenAI non initialisé. Utilisation de l'agent par défaut.")
-                return next(iter(self.agents.values()))
-
-            # Utiliser le function calling pour la sélection d'agent
-            messages = [
-                {"role": "system", "content": "Tu es un agent d'orchestration capable de sélectionner l'agent le plus approprié pour une tâche."},
-                {"role": "user", "content": f"Sélectionne l'agent le plus approprié pour la tâche : {task}"}
-            ]
-            
-            response = self.client.chat.completions.create(
-                model=self.llm_config.get('model', 'gpt-4o-mini'),
-                messages=messages,
-                functions=self._get_agent_selection_functions(),
-                function_call={"name": "select_best_agent"}
-            )
-            
-            # Extraire l'agent sélectionné
-            function_call = response.choices[0].message.function_call
-            selection_data = json.loads(function_call.arguments)
-            selected_agent_name = selection_data.get('selected_agent', {}).get('name', 'Web Search Agent')
-            
-            # Convertir le nom en agent
-            selected_agent = self.agents.get(selected_agent_name.lower().replace(' ', '_'), 
-                                             next(iter(self.agents.values())))
-            
-            return selected_agent
-        
-        except Exception as e:
-            logger.warning(f"Erreur de sélection d'agent : {e}. Utilisation de l'agent par défaut.")
-            return next(iter(self.agents.values()))
-
-    def _parse_json_response(self, response: Any) -> List[Dict[str, str]]:
-        """
-        Parser une réponse JSON de manière robuste
-        
-        Args:
-            response (Any): La réponse à parser
-        
-        Returns:
-            List[Dict[str, str]]: Liste des sous-tâches parsées
-        """
-        try:
-            # Extraction du function call
-            function_call = response.choices[0].message.function_call
-            subtasks_data = json.loads(function_call.arguments)
-            subtasks = subtasks_data.get('subtasks', [])
-            
-            # Vérification et enrichissement des sous-tâches
-            if not subtasks:
-                # Génération de sous-tâches détaillées si vide
-                subtasks = self._generate_detailed_subtasks(self.task_ledger.original_request)
-            
-            # Validation et complétion des sous-tâches
-            validated_subtasks = []
-            for subtask in subtasks:
-                validated_task = {
-                    'task': subtask.get('task', 'Tâche non spécifiée'),
-                    'agent': subtask.get('agent', 'Web Search Agent'),
-                    'priority': subtask.get('priority', 'moyenne')
-                }
-                validated_subtasks.append(validated_task)
-            
-            return validated_subtasks
-        
-        except Exception as e:
-            logger.warning(f"Erreur de parsing JSON : {e}")
-            # Génération de sous-tâches par défaut
-            return self._generate_detailed_subtasks(self.task_ledger.original_request)
-
-    def _generate_detailed_subtasks(self, request: str) -> List[Dict[str, str]]:
-        """
-        Générer des sous-tâches détaillées basées sur la requête
-        """
-        try:
-            # Première étape : identification de l'objectif global
-            global_objective_response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """
-                        Tu es un expert en analyse stratégique et définition d'objectifs.
-                        
-                        INSTRUCTIONS CRUCIALES :
-                        1. Analyse la requête de manière NEUTRE et OBJECTIVE
-                        
-                        2. Si la requête contient des références temporelles relatives (ex: 'demain', 'dans une semaine', 'hier'):
-                           - Utilise la date actuelle ({current_date}) comme référence
-                           - Convertis ces références en dates précises avant d'effectuer la recherche
-                           - Exemple: 'événements de demain' -> 'événements du {tomorrow_date}'
-                        
-                        3. Extraire l'OBJECTIF GLOBAL d'une requête
-                           - Être concis et précis
-                           - Capturer l'essence de la demande
-                        
-                        FORMAT :
-                        {
-                            "global_objective": "Description claire et concise",
-                            "objective_type": "résolution/exploration/planification/...",
-                            "key_dimensions": ["dimension1", "dimension2"],
-                            "initial_constraints": ["contrainte1", "contrainte2"]
-                        }
-                        """.format(
-                            current_date=datetime.now().strftime("%Y-%m-%d"),
-                            tomorrow_date=(datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": request
-                    }
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=300,
-                temperature=0.3
-            )
-            
-            global_objective_data = json.loads(global_objective_response.choices[0].message.content)
-            
-            # Deuxième étape : génération des sous-tâches avec résultats cumulatifs
-            response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": """
-                        Tu es un expert en décomposition de tâches séquentielles avec une stratégie de réduction de périmètre.
-
-                        PRINCIPES FONDAMENTAUX :
-                        1. ORDONNANCEMENT STRATEGIQUE des sous-tâches
-                           - Chaque sous-tâche RÉDUIT PROGRESSIVEMENT le champ de recherche
-                           - Minimiser le périmètre de la tâche suivante
-                           - Créer une LOGIQUE DÉICTIQUE (qui se resserre)
-
-                        2. CRITÈRES D'ORDONNANCEMENT :
-                           - Commencer par les tâches qui ÉLARGISSENT le champ
-                           - Progresser vers des tâches de plus en plus SPÉCIFIQUES
-                           - Chaque étape LIMITE le périmètre de la suivante
-
-                        3. STRATÉGIE DE RÉDUCTION :
-                           - Tâche 1 : Vue large, exploration générale
-                           - Tâche 2 : Filtrage, réduction du champ
-                           - Tâche N : Précision maximale, résultat final
-
-                        4. CONTRAINTES D'EXÉCUTION :
-                           - Chaque sous-tâche UTILISE les résultats de la précédente
-                           - Réduire EXPONENTIELLEMENT le périmètre de recherche
-                           - Garantir une progression logique et efficace
-
-                        FORMAT IMPÉRATIF :
-                        [
-                            {
-                                "task": "Description précise",
-                                "agent": "Agent optimal",
-                                "priority": "haute/moyenne/basse",
-                                "contribution": "Rôle dans l'objectif global",
-                                "input_constraints": ["résultat tâche précédente"],
-                                "output_constraints": ["résultat à produire"],
-                                "reduction_ratio": "Pourcentage de réduction du périmètre"
-                            }
-                        ]
-                        """
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"""
-                        Requête originale : {request}
-                        
-                        OBJECTIF GLOBAL :
-                        - Description : {global_objective_data.get('global_objective', 'Non défini')}
-                        - Type : {global_objective_data.get('objective_type', 'Non spécifié')}
-                        - Dimensions clés : {', '.join(global_objective_data.get('key_dimensions', []))}
-                        - Contraintes initiales : {', '.join(global_objective_data.get('initial_constraints', []))}
-                        
-                        CONSIGNE CRUCIALE : 
-                        - Décompose en sous-tâches séquentielles
-                        - CHAQUE sous-tâche UTILISE les résultats des tâches précédentes
-                        - Réduire PROGRESSIVEMENT le périmètre de recherche
-                        - Chaque résultat LIMITE le champ de la tâche suivante
-                        """
-                    }
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.4
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            subtasks = result.get('subtasks', [])
-            
-            return subtasks
-        
-        except Exception as e:
-            logger.error(f"Erreur de génération de sous-tâches : {e}")
-            return [{
-                'task': "Analyse stratégique globale",
-                'agent': 'Multi-Purpose Agent',
-                'priority': 'haute',
-                'contribution': f"Décomposition et résolution de la requête complexe : {request}",
-                'input_constraints': [],
-                'output_constraints': ["Fournir une analyse complète"]
-            }]
-
-    def _get_dict_value(self, obj: Any, key: str, default: Any = None) -> Any:
-        """
-        Récupérer une valeur d'un dictionnaire de manière sécurisée
-        """
-        try:
-            if hasattr(obj, 'dict'):
-                # Pour les objets Pydantic
-                return obj.dict().get(key, default)
-            elif hasattr(obj, 'get'):
-                # Pour les dictionnaires
-                return obj.get(key, default)
-            elif hasattr(obj, key):
-                # Pour les objets avec attributs
-                return getattr(obj, key)
-            else:
-                return default
-        except Exception:
-            return default
-
-    def _extract_content(self, result: Any) -> str:
-        """
-        Extraire le contenu d'un résultat de différents types avec une gestion robuste
-        
-        Args:
-            result (Any): Le résultat à extraire
-        
-        Returns:
-            str: Le contenu extrait
-        """
-        # Gestion explicite des RunResponse
-        if hasattr(result, 'content'):
-            # Vérifier le type de contenu
-            if isinstance(result.content, str):
-                return result.content
-            elif isinstance(result.content, dict):
-                return json.dumps(result.content)
-            elif result.content is None:
-                return ""
-            else:
-                return str(result.content)
-        
-        # Autres types de résultats
-        if result is None:
-            return ""
-        
-        # Gestion des dictionnaires et listes
-        if isinstance(result, (dict, list)):
-            return json.dumps(result)
-        
-        # Conversion en chaîne par défaut
-        return str(result)
+            return False  # Par défaut, ne pas décomposer
 
     async def decompose_task(self, user_request: str) -> TaskLedger:
         """
@@ -857,6 +588,200 @@ class OrchestratorAgent:
             )
         
         return self.task_ledger
+
+    def _select_best_agent(self, task: str) -> Agent:
+        """
+        Sélectionner l'agent le plus approprié avec function calling
+        
+        Args:
+            task (str): Tâche à exécuter
+        
+        Returns:
+            Agent: Agent sélectionné
+        """
+        try:
+            # Vérifier si le client est initialisé
+            if self.client is None:
+                logger.warning("Client OpenAI non initialisé. Utilisation de l'agent par défaut.")
+                return next(iter(self.agents.values()))
+
+            # Utiliser le function calling pour la sélection d'agent
+            messages = [
+                {"role": "system", "content": "Tu es un agent d'orchestration capable de sélectionner l'agent le plus approprié pour une tâche."},
+                {"role": "user", "content": f"Sélectionne l'agent le plus approprié pour la tâche : {task}"}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.llm_config.get('model', 'gpt-4o-mini'),
+                messages=messages,
+                functions=self._get_agent_selection_functions(),
+                function_call={"name": "select_best_agent"}
+            )
+            
+            # Extraire l'agent sélectionné
+            function_call = response.choices[0].message.function_call
+            selection_data = json.loads(function_call.arguments)
+            selected_agent_name = selection_data.get('selected_agent', {}).get('name', 'Web Search Agent')
+            
+            # Convertir le nom en agent
+            selected_agent = self.agents.get(selected_agent_name.lower().replace(' ', '_'), 
+                                             next(iter(self.agents.values())))
+            
+            return selected_agent
+        
+        except Exception as e:
+            logger.warning(f"Erreur de sélection d'agent : {e}. Utilisation de l'agent par défaut.")
+            return next(iter(self.agents.values()))
+
+    def _parse_json_response(self, response: Any) -> List[Dict[str, str]]:
+        """
+        Parser une réponse JSON de manière robuste
+        
+        Args:
+            response (Any): La réponse à parser
+        
+        Returns:
+            List[Dict[str, str]]: Liste des sous-tâches parsées
+        """
+        try:
+            # Log du type et du contenu brut de la réponse
+            logger.debug(f"Type de réponse brute : {type(response)}")
+            logger.debug(f"Contenu brut : {response}")
+
+            # Si c'est déjà une liste, le retourner directement
+            if isinstance(response, list):
+                return response
+            
+            # Convertir en chaîne si ce n'est pas déjà le cas
+            if not isinstance(response, str):
+                response = str(response)
+            
+            # Nettoyer la réponse
+            response = response.strip()
+            
+            # Importer les modules nécessaires
+            import re
+            import json
+            
+            # Extraire le contenu JSON entre ```json et ``` si présent
+            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
+            if json_match:
+                response = json_match.group(1)
+            
+            # Log du contenu après extraction
+            logger.debug(f"Contenu après extraction JSON : {response}")
+            
+            # Tenter de parser le JSON
+            try:
+                parsed_response = json.loads(response)
+            except json.JSONDecodeError:
+                # Tenter de nettoyer le JSON
+                response = re.sub(r'[\r\n\t]', ' ', response)
+                try:
+                    parsed_response = json.loads(response)
+                except json.JSONDecodeError:
+                    # Tentative alternative de parsing
+                    match = re.search(r'\[.*\]', response, re.DOTALL)
+                    if match:
+                        try:
+                            parsed_response = json.loads(match.group(0))
+                        except json.JSONDecodeError:
+                            parsed_response = None
+            
+            # Log du résultat du parsing
+            logger.debug(f"Résultat du parsing : {parsed_response}")
+            
+            # Si c'est un dictionnaire, le convertir en liste
+            if isinstance(parsed_response, dict):
+                if 'subtasks' in parsed_response:
+                    return parsed_response['subtasks']
+                elif 'task' in parsed_response:
+                    # Convertir un dictionnaire de tâche unique en liste
+                    return [parsed_response]
+                elif 'selected_agent' in parsed_response:
+                    # Cas de sélection d'agent
+                    return [{
+                        "task": "Tâche générique",
+                        "agent": parsed_response.get('selected_agent', 'Web Search Agent'),
+                        "priority": "moyenne"
+                    }]
+            
+            # Si c'est une liste, le retourner
+            if isinstance(parsed_response, list):
+                return parsed_response
+            
+            # Fallback : créer une sous-tâche par défaut
+            logger.warning("Format de réponse JSON inattendu. Création d'une sous-tâche par défaut.")
+            return [{
+                "task": "Tâche générique",
+                "agent": "Web Search Agent",
+                "priority": "moyenne"
+            }]
+        
+        except Exception as e:
+            # Log détaillé de l'erreur
+            logger.error(f"Erreur lors du parsing JSON : {e}")
+            logger.error(f"Type d'erreur : {type(e)}")
+            logger.error(f"Contenu brut reçu : {response}")
+            
+            # Fallback ultime
+            return [{
+                "task": "Tâche générique",
+                "agent": "Web Search Agent", 
+                "priority": "moyenne"
+            }]
+
+    def _get_dict_value(self, obj: Any, key: str, default: Any = None) -> Any:
+        """
+        Récupérer une valeur d'un dictionnaire de manière sécurisée
+        """
+        try:
+            if hasattr(obj, 'dict'):
+                # Pour les objets Pydantic
+                return obj.dict().get(key, default)
+            elif hasattr(obj, 'get'):
+                # Pour les dictionnaires
+                return obj.get(key, default)
+            elif hasattr(obj, key):
+                # Pour les objets avec attributs
+                return getattr(obj, key)
+            else:
+                return default
+        except Exception:
+            return default
+
+    def _extract_content(self, result: Any) -> str:
+        """
+        Extraire le contenu d'un résultat de différents types avec une gestion robuste
+        
+        Args:
+            result (Any): Le résultat à extraire
+        
+        Returns:
+            str: Le contenu extrait
+        """
+        # Gestion explicite des RunResponse
+        if hasattr(result, 'content'):
+            # Vérifier le type de contenu
+            if isinstance(result.content, str):
+                return result.content
+            elif isinstance(result.content, dict):
+                return json.dumps(result.content)
+            elif result.content is None:
+                return ""
+            else:
+                return str(result.content)
+        
+        # Autres types de résultats
+        if result is None:
+            return ""
+        
+        # Gestion des dictionnaires et listes
+        if isinstance(result, (dict, list)):
+            return json.dumps(result)
+        
+        # Conversion en chaîne par défaut
+        return str(result)
 
     async def execute_task(self, task_ledger: TaskLedger) -> Dict[str, Any]:
         """
