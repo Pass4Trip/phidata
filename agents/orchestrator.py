@@ -1,22 +1,18 @@
-from typing import List, Dict, Any, Optional, Union
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-import json
-import re
-import traceback
-
 import os
+import sys
+import asyncio
+import logging
+import json
+import uuid
+import traceback
+from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from phi.agent import RunResponse, Agent
 import openai
-from phi.agent import Agent
-from phi.model.openai import OpenAIChat
-from phi.tools.python import PythonTools
-from phi.tools.duckduckgo import DuckDuckGo
 
-from agents.settings import agent_settings
 from agents.web import get_web_searcher
-from agents.api_knowledge import get_api_knowledge_agent
-from agents.data_analysis import get_data_analysis_agent
-from agents.travel_planner import get_travel_planner
+from agents.settings import agent_settings
 from agents.orchestrator_prompts import (
     get_task_decomposition_prompt,
     get_task_execution_prompt,
@@ -25,10 +21,23 @@ from agents.orchestrator_prompts import (
 
 from utils.colored_logging import get_colored_logger
 
-import asyncio
-from .agent_registry import agent_registry, AgentMetadata
+# Ajouter le répertoire parent au PYTHONPATH
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
 
-logger = get_colored_logger('agents.orchestrator', 'OrchestratorAgent')
+# Configuration du logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Ajout d'un handler de console si nécessaire
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+# Ajouter le handler au logger s'il n'est pas déjà présent
+if not logger.handlers:
+    logger.addHandler(console_handler)
 
 AGENT_ROUTING_PROMPT = """
 Pour la tâche : '{task}'
@@ -261,7 +270,11 @@ class OrchestratorAgent:
         model_id: str = "gpt-4o-mini", 
         debug_mode: bool = False,
         original_request: Optional[str] = None,
-        api_key: Optional[str] = None  # Ajout du paramètre api_key
+        api_key: Optional[str] = None,  
+        enable_web_agent: bool = True,
+        enable_api_knowledge_agent: bool = False,
+        enable_data_analysis_agent: bool = False,
+        enable_travel_planner: bool = False
     ):
         """
         Initialiser l'agent orchestrateur avec des agents spécialisés
@@ -271,6 +284,10 @@ class OrchestratorAgent:
             debug_mode (bool): Mode de débogage
             original_request (Optional[str]): Requête originale pour le TaskLedger
             api_key (Optional[str]): Clé API OpenAI personnalisée
+            enable_web_agent (bool): Activer l'agent de recherche web
+            enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
+            enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
+            enable_travel_planner (bool): Activer l'agent de planification de voyage
         """
         # Configuration du modèle LLM
         self.llm_config = {
@@ -288,8 +305,19 @@ class OrchestratorAgent:
             logger.error(f"❌ Erreur d'initialisation du client OpenAI : {e}")
             self.client = None
         
+        # Initialiser le modèle OpenAI
+        self.model = self.client.chat.completions.create
+        
+        # Initialiser self.llm comme alias de self.model
+        self.llm = self.model
+        
         # Initialisation centralisée des agents
-        self.agents = self._initialize_specialized_agents()
+        self.agents = self._initialize_specialized_agents(
+            enable_web_agent=enable_web_agent,
+            enable_api_knowledge_agent=enable_api_knowledge_agent,
+            enable_data_analysis_agent=enable_data_analysis_agent,
+            enable_travel_planner=enable_travel_planner
+        )
         
         # Initialisation du mode de débogage
         self.debug_mode = debug_mode
@@ -300,30 +328,99 @@ class OrchestratorAgent:
         # Créer l'agent orchestrateur avec configuration simplifiée
         self.agent = self._create_orchestrator_agent(debug_mode)
 
-    def _initialize_specialized_agents(self) -> Dict[str, Agent]:
+    def _initialize_specialized_agents(
+        self, 
+        enable_web_agent: bool = False,
+        enable_api_knowledge_agent: bool = False,
+        enable_data_analysis_agent: bool = False,
+        enable_travel_planner: bool = False
+    ) -> Dict[str, Agent]:
         """
-        Initialiser tous les agents spécialisés de manière centralisée
+        Initialiser tous les agents spécialisés de manière dynamique
+        
+        Args:
+            enable_web_agent (bool): Activer l'agent de recherche web
+            enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
+            enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
+            enable_travel_planner (bool): Activer l'agent de planification de voyage
         
         Returns:
             Dict[str, Agent]: Dictionnaire des agents disponibles
         """
-        return {
-            "web_search": get_web_searcher(
-                model_id=agent_settings.gpt_4,
-                debug_mode=False,
-                name="Web Search Agent"
-            ),
-            "api_knowledge": get_api_knowledge_agent(
-                debug_mode=False,
-                user_id=None,
-                session_id=None
-            ),
-            "travel_planner": get_travel_planner(
-                model_id=agent_settings.gpt_4,
-                debug_mode=False,
-                name="Travel Planner Agent"
-            )
-        }
+        logger.info("🤖 Initialisation des agents spécialisés")
+        logger.info(f"🌐 Web Agent: {enable_web_agent}")
+        logger.info(f"📚 API Knowledge Agent: {enable_api_knowledge_agent}")
+        logger.info(f"📊 Data Analysis Agent: {enable_data_analysis_agent}")
+        logger.info(f"✈️ Travel Planner Agent: {enable_travel_planner}")
+        
+        agents = {}
+        
+        # Agent de recherche web
+        if enable_web_agent:
+            try:
+                agents["web_search"] = get_web_searcher(
+                    model_id=agent_settings.gpt_4,
+                    debug_mode=False,
+                    name="Web Search Agent"
+                )
+                logger.info("✅ Agent de recherche web initialisé")
+            except Exception as e:
+                logger.error(f"❌ Erreur d'initialisation de l'agent de recherche web : {e}")
+        
+        # Agent de connaissances API (à implémenter)
+        if enable_api_knowledge_agent:
+            try:
+                from agents.api_knowledge import get_api_knowledge_agent
+                agents["api_knowledge"] = get_api_knowledge_agent(
+                    debug_mode=False,
+                    user_id=None,
+                    session_id=None
+                )
+                logger.info("✅ Agent de connaissances API initialisé")
+            except ImportError:
+                logger.warning("❌ Agent de connaissances API non disponible")
+        
+        # Agent d'analyse de données (à implémenter)
+        if enable_data_analysis_agent:
+            try:
+                from agents.data_analysis import get_data_analysis_agent
+                agents["data_analysis"] = get_data_analysis_agent(
+                    debug_mode=False,
+                    user_id=None,
+                    session_id=None
+                )
+                logger.info("✅ Agent d'analyse de données initialisé")
+            except ImportError:
+                logger.warning("❌ Agent d'analyse de données non disponible")
+        
+        # Agent de planification de voyage (à implémenter)
+        if enable_travel_planner:
+            try:
+                from agents.travel import get_travel_planner_agent
+                agents["travel_planner"] = get_travel_planner_agent(
+                    debug_mode=False,
+                    user_id=None,
+                    session_id=None
+                )
+                logger.info("✅ Agent de planification de voyage initialisé")
+            except ImportError:
+                logger.warning("❌ Agent de planification de voyage non disponible")
+        
+        # Ajout d'un agent mathématique par défaut
+        agents["math_agent"] = Agent(
+            instructions=[
+                "Tu es un agent spécialisé dans les calculs mathématiques.",
+                "Réponds uniquement aux questions mathématiques simples.",
+                "Assure-toi de donner une réponse précise et concise."
+            ],
+            name="Math Agent"
+        )
+        logger.info("✅ Agent mathématique par défaut initialisé")
+        
+        # Log des agents disponibles
+        logger.info(f"🤖 Agents initialisés : {list(agents.keys())}")
+        
+        return agents
 
     def _create_task_ledger(self, original_request: Optional[str] = None) -> TaskLedger:
         """
@@ -340,9 +437,9 @@ class OrchestratorAgent:
             context={name: agent for name, agent in self.agents.items()}
         )
 
-    def _create_orchestrator_agent(self, debug_mode: bool) -> Agent:
+    def _create_orchestrator_agent(self, debug_mode: bool = False) -> Agent:
         """
-        Créer l'agent orchestrateur avec configuration unifiée
+        Créer l'agent orchestrateur avec configuration simplifiée
         
         Args:
             debug_mode (bool): Mode de débogage
@@ -351,24 +448,20 @@ class OrchestratorAgent:
             Agent: Agent orchestrateur configuré
         """
         return Agent(
-            llm=OpenAIChat(**self.llm_config),
-            tools=[
-                PythonTools(),
-                DuckDuckGo()
-            ],
+            # Utiliser la méthode create du client OpenAI
+            llm=self.client.chat.completions.create,
             instructions=[
                 "Tu es un agent d'orchestration avancé capable de décomposer des tâches complexes.",
                 "Étapes de travail :",
-                "1. Analyser la requête initiale",
-                "2. Décomposer en sous-tâches précises",
-                "3. Sélectionner l'agent le plus approprié",
-                "4. Coordonner l'exécution des sous-tâches",
+                "1. Analyser la requête originale",
+                "2. Décomposer la requête en sous-tâches précises et réalisables",
+                "3. Attribuer chaque sous-tâche à l'agent le plus approprié",
+                "4. Suivre la progression de chaque sous-tâche",
                 "5. Intégrer et synthétiser les résultats partiels",
                 "6. Adapter dynamiquement le plan si nécessaire"
             ],
-            team=list(self.agents.values()),
-            debug_mode=debug_mode,
-            name="Advanced Task Orchestrator"
+            # Ajouter le mode de débogage si nécessaire
+            debug_mode=debug_mode
         )
 
     def _get_task_decomposition_functions(self) -> List[Dict[str, Any]]:
@@ -423,6 +516,8 @@ class OrchestratorAgent:
         """
         Définir les fonctions d'appel pour la sélection d'agents
         
+        Args:
+        
         Returns:
             List[Dict[str, Any]]: Liste des définitions de fonctions
         """
@@ -446,8 +541,8 @@ class OrchestratorAgent:
                                     "description": "Nom de l'agent",
                                     "enum": [
                                         "Web Search Agent", 
-                                        "API Knowledge Agent", 
-                                        "Travel Planner Agent"
+                                        #"API Knowledge Agent", 
+
                                     ]
                                 },
                                 "confidence_score": {
@@ -526,271 +621,137 @@ class OrchestratorAgent:
 
     def _select_best_agent(self, task: str) -> Agent:
         """
-        Sélectionner l'agent le plus approprié avec function calling
+        Sélectionner dynamiquement le meilleur agent pour une tâche donnée
         
         Args:
-            task (str): Tâche à exécuter
+            task (str): La tâche à exécuter
         
         Returns:
-            Agent: Agent sélectionné
+            Agent: L'agent le plus approprié
         """
+        # Sélection par LLM
         try:
-            # Vérifier si le client est initialisé
-            if self.client is None:
-                logger.warning("Client OpenAI non initialisé. Utilisation de l'agent par défaut.")
-                return next(iter(self.agents.values()))
-
-            # Utiliser le function calling pour la sélection d'agent
-            messages = [
-                {"role": "system", "content": "Tu es un agent d'orchestration capable de sélectionner l'agent le plus approprié pour une tâche."},
-                {"role": "user", "content": f"Sélectionne l'agent le plus approprié pour la tâche : {task}"}
-            ]
-            
+            # Utiliser l'API OpenAI pour classifier la tâche
             response = self.client.chat.completions.create(
-                model=self.llm_config.get('model', 'gpt-4o-mini'),
-                messages=messages,
-                functions=self._get_agent_selection_functions(),
-                function_call={"name": "select_best_agent"}
-            )
-            
-            # Extraire l'agent sélectionné
-            function_call = response.choices[0].message.function_call
-            selection_data = json.loads(function_call.arguments)
-            selected_agent_name = selection_data.get('selected_agent', {}).get('name', 'Web Search Agent')
-            
-            # Convertir le nom en agent
-            selected_agent = self.agents.get(selected_agent_name.lower().replace(' ', '_'), 
-                                             next(iter(self.agents.values())))
-            
-            return selected_agent
-        
-        except Exception as e:
-            logger.warning(f"Erreur de sélection d'agent : {e}. Utilisation de l'agent par défaut.")
-            return next(iter(self.agents.values()))
-
-    def _parse_json_response(self, response: Any) -> List[Dict[str, str]]:
-        """
-        Parser une réponse JSON de manière robuste
-        
-        Args:
-            response (Any): La réponse à parser
-        
-        Returns:
-            List[Dict[str, str]]: Liste des sous-tâches parsées
-        """
-        try:
-            # Extraction du function call
-            function_call = response.choices[0].message.function_call
-            subtasks_data = json.loads(function_call.arguments)
-            subtasks = subtasks_data.get('subtasks', [])
-            
-            # Vérification et enrichissement des sous-tâches
-            if not subtasks:
-                # Génération de sous-tâches détaillées si vide
-                subtasks = self._generate_detailed_subtasks(self.task_ledger.original_request)
-            
-            # Validation et complétion des sous-tâches
-            validated_subtasks = []
-            for subtask in subtasks:
-                validated_task = {
-                    'task': subtask.get('task', 'Tâche non spécifiée'),
-                    'agent': subtask.get('agent', 'Web Search Agent'),
-                    'priority': subtask.get('priority', 'moyenne')
-                }
-                validated_subtasks.append(validated_task)
-            
-            return validated_subtasks
-        
-        except Exception as e:
-            logger.warning(f"Erreur de parsing JSON : {e}")
-            # Génération de sous-tâches par défaut
-            return self._generate_detailed_subtasks(self.task_ledger.original_request)
-
-    def _generate_detailed_subtasks(self, request: str) -> List[Dict[str, str]]:
-        """
-        Générer des sous-tâches détaillées basées sur la requête
-        """
-        try:
-            # Première étape : identification de l'objectif global
-            global_objective_response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """
-                        Tu es un expert en analyse stratégique et définition d'objectifs.
-                        
-                        INSTRUCTIONS CRUCIALES :
-                        1. Analyse la requête de manière NEUTRE et OBJECTIVE
-                        
-                        2. Si la requête contient des références temporelles relatives (ex: 'demain', 'dans une semaine', 'hier'):
-                           - Utilise la date actuelle ({current_date}) comme référence
-                           - Convertis ces références en dates précises avant d'effectuer la recherche
-                           - Exemple: 'événements de demain' -> 'événements du {tomorrow_date}'
-                        
-                        3. Extraire l'OBJECTIF GLOBAL d'une requête
-                           - Être concis et précis
-                           - Capturer l'essence de la demande
-                        
-                        FORMAT :
-                        {
-                            "global_objective": "Description claire et concise",
-                            "objective_type": "résolution/exploration/planification/...",
-                            "key_dimensions": ["dimension1", "dimension2"],
-                            "initial_constraints": ["contrainte1", "contrainte2"]
-                        }
-                        """.format(
-                            current_date=datetime.now().strftime("%Y-%m-%d"),
-                            tomorrow_date=(datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": request
-                    }
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=300,
-                temperature=0.3
-            )
-            
-            global_objective_data = json.loads(global_objective_response.choices[0].message.content)
-            
-            # Deuxième étape : génération des sous-tâches avec résultats cumulatifs
-            response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
+                model=self.llm_config['model'],
                 messages=[
                     {
                         "role": "system", 
-                        "content": """
-                        Tu es un expert en décomposition de tâches séquentielles avec une stratégie de réduction de périmètre.
-
-                        PRINCIPES FONDAMENTAUX :
-                        1. ORDONNANCEMENT STRATEGIQUE des sous-tâches
-                           - Chaque sous-tâche RÉDUIT PROGRESSIVEMENT le champ de recherche
-                           - Minimiser le périmètre de la tâche suivante
-                           - Créer une LOGIQUE DÉICTIQUE (qui se resserre)
-
-                        2. CRITÈRES D'ORDONNANCEMENT :
-                           - Commencer par les tâches qui ÉLARGISSENT le champ
-                           - Progresser vers des tâches de plus en plus SPÉCIFIQUES
-                           - Chaque étape LIMITE le périmètre de la suivante
-
-                        3. STRATÉGIE DE RÉDUCTION :
-                           - Tâche 1 : Vue large, exploration générale
-                           - Tâche 2 : Filtrage, réduction du champ
-                           - Tâche N : Précision maximale, résultat final
-
-                        4. CONTRAINTES D'EXÉCUTION :
-                           - Chaque sous-tâche UTILISE les résultats de la précédente
-                           - Réduire EXPONENTIELLEMENT le périmètre de recherche
-                           - Garantir une progression logique et efficace
-
-                        FORMAT IMPÉRATIF :
-                        [
-                            {
-                                "task": "Description précise",
-                                "agent": "Agent optimal",
-                                "priority": "haute/moyenne/basse",
-                                "contribution": "Rôle dans l'objectif global",
-                                "input_constraints": ["résultat tâche précédente"],
-                                "output_constraints": ["résultat à produire"],
-                                "reduction_ratio": "Pourcentage de réduction du périmètre"
-                            }
-                        ]
-                        """
+                        "content": "Tu es un assistant qui aide à sélectionner le bon agent parmi une liste."
                     },
                     {
                         "role": "user", 
                         "content": f"""
-                        Requête originale : {request}
+                        Étant donné la tâche suivante, détermine quel agent serait le plus approprié :
                         
-                        OBJECTIF GLOBAL :
-                        - Description : {global_objective_data.get('global_objective', 'Non défini')}
-                        - Type : {global_objective_data.get('objective_type', 'Non spécifié')}
-                        - Dimensions clés : {', '.join(global_objective_data.get('key_dimensions', []))}
-                        - Contraintes initiales : {', '.join(global_objective_data.get('initial_constraints', []))}
+                        Tâche : {task}
                         
-                        CONSIGNE CRUCIALE : 
-                        - Décompose en sous-tâches séquentielles
-                        - CHAQUE sous-tâche UTILISE les résultats des tâches précédentes
-                        - Réduire PROGRESSIVEMENT le périmètre de recherche
-                        - Chaque résultat LIMITE le champ de la tâche suivante
+                        Agents disponibles : {list(self.agents.keys())}
+                        
+                        Réponds uniquement avec le nom de l'agent le plus adapté.
                         """
                     }
                 ],
-                response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.4
+                temperature=0.2,
+                max_tokens=300
             )
             
-            result = json.loads(response.choices[0].message.content)
-            subtasks = result.get('subtasks', [])
+            # Extraire et traiter la classification
+            classification = response.choices[0].message.content.strip().lower()
+            logger.info(f"🧠 Classification de la tâche : {classification}")
+            logger.info(f"🔍 Agents disponibles : {list(self.agents.keys())}")
+
+            # Convertir le nom en agent
+            selected_agent_name = classification.lower().replace(' ', '_')
+            selected_agent = self.agents.get(selected_agent_name)
             
-            return subtasks
+            logger.info(f"🏆 Agent sélectionné : {selected_agent_name}")
+            return selected_agent
         
         except Exception as e:
-            logger.error(f"Erreur de génération de sous-tâches : {e}")
-            return [{
-                'task': "Analyse stratégique globale",
-                'agent': 'Multi-Purpose Agent',
-                'priority': 'haute',
-                'contribution': f"Décomposition et résolution de la requête complexe : {request}",
-                'input_constraints': [],
-                'output_constraints': ["Fournir une analyse complète"]
-            }]
+            logger.error(f"❌ Erreur de sélection d'agent : {e}")
+            return next(iter(self.agents.values()))
 
-    def _get_dict_value(self, obj: Any, key: str, default: Any = None) -> Any:
+    def _publish_rabbitmq_message(self, queue_name: str, message: Dict[str, Any]) -> bool:
         """
-        Récupérer une valeur d'un dictionnaire de manière sécurisée
-        """
-        try:
-            if hasattr(obj, 'dict'):
-                # Pour les objets Pydantic
-                return obj.dict().get(key, default)
-            elif hasattr(obj, 'get'):
-                # Pour les dictionnaires
-                return obj.get(key, default)
-            elif hasattr(obj, key):
-                # Pour les objets avec attributs
-                return getattr(obj, key)
-            else:
-                return default
-        except Exception:
-            return default
-
-    def _extract_content(self, result: Any) -> str:
-        """
-        Extraire le contenu d'un résultat de différents types avec une gestion robuste
+        Publier un message dans une file RabbitMQ
         
         Args:
-            result (Any): Le résultat à extraire
+            queue_name (str): Nom de la file
+            message (Dict[str, Any]): Message à publier
         
         Returns:
-            str: Le contenu extrait
+            bool: True si la publication a réussi, False sinon
         """
-        # Gestion explicite des RunResponse
-        if hasattr(result, 'content'):
-            # Vérifier le type de contenu
-            if isinstance(result.content, str):
-                return result.content
-            elif isinstance(result.content, dict):
-                return json.dumps(result.content)
-            elif result.content is None:
-                return ""
-            else:
-                return str(result.content)
+        try:
+            # Importer pika de manière sécurisée
+            import importlib
+            import os
+            from dotenv import load_dotenv
+            
+            # Charger les variables d'environnement
+            load_dotenv()
+            
+            # Récupérer les paramètres de connexion RabbitMQ
+            rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
+            rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
+            rabbitmq_user = os.getenv('RABBITMQ_USER', '')
+            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD', '')
+            
+            # Importer pika
+            pika = importlib.import_module('pika')
+            
+            # Configurer les paramètres de connexion
+            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password) if rabbitmq_user else None
+            connection_params = pika.ConnectionParameters(
+                host=rabbitmq_host,
+                port=rabbitmq_port,
+                credentials=credentials,
+                connection_attempts=2,
+                retry_delay=1
+            )
+            
+            # Établir la connexion
+            try:
+                connection = pika.BlockingConnection(connection_params)
+            except (pika.exceptions.AMQPConnectionError, ConnectionRefusedError) as conn_error:
+                logger.warning(f"Impossible de se connecter à RabbitMQ : {conn_error}")
+                return False
+            
+            try:
+                channel = connection.channel()
+                
+                # Déclarer la queue si elle n'existe pas
+                channel.queue_declare(queue=queue_name, durable=True)
+                
+                # Publier le message
+                channel.basic_publish(
+                    exchange='',
+                    routing_key=queue_name,
+                    body=json.dumps(message),
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Rendre le message persistant
+                        content_type='application/json'
+                    )
+                )
+                
+                logger.info(f"Message publié dans la file {queue_name} sur {rabbitmq_host}:{rabbitmq_port}")
+                return True
+            
+            except Exception as publish_error:
+                logger.error(f"Erreur lors de la publication dans RabbitMQ : {publish_error}")
+                return False
+            
+            finally:
+                connection.close()
         
-        # Autres types de résultats
-        if result is None:
-            return ""
+        except ImportError:
+            logger.warning("La bibliothèque pika n'est pas installée.")
+            return False
         
-        # Gestion des dictionnaires et listes
-        if isinstance(result, (dict, list)):
-            return json.dumps(result)
-        
-        # Conversion en chaîne par défaut
-        return str(result)
+        except Exception as e:
+            logger.error(f"Erreur inattendue lors de la publication RabbitMQ : {e}")
+            return False
 
     async def decompose_task(self, user_request: str) -> TaskLedger:
         """
@@ -802,135 +763,153 @@ class OrchestratorAgent:
         Returns:
             TaskLedger: Le registre de tâches mis à jour
         """
-        # 1. Vérification préliminaire de décomposition
-        needs_decomposition = self.should_decompose_task(user_request)
-        
-        # Ajouter un fait sur la décision de décomposition
-        self.task_ledger.add_fact(
-            f"Décomposition nécessaire : {needs_decomposition}", 
-            fact_type="derived"
-        )
-        
-        # 2. Si pas besoin de décomposition, traitement simple
-        if not needs_decomposition:
-            # Ajouter directement la tâche au registre
-            self.task_ledger.add_task(user_request)
-            logger.info(f"""
-Task Ledger généré :
-    - Requête utilisateur : {user_request}
-    - Nombre de sous-tâches : 1
-""")
-            return self.task_ledger
-        
-        # 3. Logique existante de décomposition avec function calling
         try:
-            # Appel au LLM pour décomposer la tâche
-            response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
-                messages=[
-                    {"role": "system", "content": "Décompose la tâche en sous-tâches précises et ordonnées"},
-                    {"role": "user", "content": user_request}
-                ],
-                functions=self._get_task_decomposition_functions(),
-                function_call={"name": "decompose_task"}
-            )
+            # Générer un ID unique pour la tâche
+            task_id = str(uuid.uuid4())
             
-            # 4. Parsing de la réponse
-            decomposition = self._parse_json_response(response)
+            # Décomposer la tâche
+            detailed_subtasks = self._generate_detailed_subtasks(user_request)
             
-            # 5. Ajouter les sous-tâches au registre
-            for subtask in decomposition:
-                self.task_ledger.add_task(subtask['task'])
-                
-                # Ajouter un fait sur chaque sous-tâche
-                self.task_ledger.add_fact(
-                    f"Sous-tâche identifiée : {subtask['task']}", 
-                    fact_type="derived"
-                )
+            # Mettre à jour le TaskLedger
+            self.task_ledger.current_plan = [
+                subtask['description']
+                for subtask in detailed_subtasks
+            ]
             
-            logger.info(f"""
-                Task Ledger généré :
-                - Requête utilisateur : {user_request}
-                - Nombre de sous-tâches : {len(decomposition)}
-                - Détail des sous-tâches :
-                {json.dumps(decomposition, indent=2)}
-                """)
+            # Préparer le message de progression pour RabbitMQ
+            progress_message = {
+                'task_id': task_id,
+                'original_request': user_request,
+                'total_subtasks': len(detailed_subtasks),
+                'subtasks': detailed_subtasks,
+                'status': 'started',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Publier le message dans la queue de progression
+            self._publish_rabbitmq_message('queue_progress_task', progress_message)
             
             return self.task_ledger
         
         except Exception as e:
-            # Gestion des erreurs
-            logger.error(f"Erreur lors de la décomposition : {e}")
-            
-            # Repli : ajouter la tâche originale
-            self.task_ledger.add_task(user_request)
-            self.task_ledger.add_fact(
-                f"Échec de décomposition, tâche originale conservée", 
-                fact_type="guesses"
-            )
-        
-        return self.task_ledger
+            logger.error(f"Erreur lors de la décomposition de tâche : {e}")
+            # Retourner le TaskLedger même en cas d'erreur
+            return self.task_ledger
 
-    async def execute_task(self, task_ledger: TaskLedger) -> Dict[str, Any]:
+    async def execute_task(
+        self, 
+        task_ledger: TaskLedger, 
+        dev_mode: bool = False
+    ) -> Dict[str, Any]:
         """
         Exécuter les sous-tâches de manière unifiée
         
         Args:
             task_ledger (TaskLedger): Le registre de tâches à exécuter
+            dev_mode (bool): Mode développement qui simule l'exécution
         
         Returns:
             Dict[str, Any]: Résultats de l'exécution des tâches
         """
+        # Mode développement : simulation des résultats
+        if dev_mode:
+            task_results = {}
+            for task in task_ledger.current_plan:
+                task_results[task] = {
+                    'result': 'simulation_response_task_ok',
+                    'agent': 'dev_simulation'
+                }
+            
+            return {
+                'task_results': task_results,
+                'synthesized_result': 'Simulation complète des tâches en mode développement'
+            }
+        
+        # Mode normal d'exécution
         task_results = {}
         
         try:
             logger.info("📋 Début de l'exécution des sous-tâches")
             logger.info(f"🔢 Nombre total de sous-tâches : {len(task_ledger.current_plan)}")
             
-            for task_index, current_task in enumerate(task_ledger.current_plan[:], 1):
+            # Générer un ID unique pour la session d'exécution
+            execution_id = str(uuid.uuid4())
+            
+            # Parcourir chaque sous-tâche
+            for task_index, task in enumerate(task_ledger.current_plan, 1):
                 try:
-                    # Sélection dynamique de l'agent
-                    selected_agent = self._select_best_agent(current_task)
+                    # Sélectionner l'agent le plus approprié
+                    selected_agent = self._select_best_agent(task)
                     
-                    # Exécution de la tâche
-                    logger.info(f"🚀 Exécution de la sous-tâche {task_index}/{len(task_ledger.current_plan)}")
-                    logger.info(f"📝 Tâche : {current_task}")
-                    logger.info(f"🤖 Agent sélectionné : {selected_agent.name}")
-                    
-                    result = await selected_agent.arun(current_task)
-                    
-                    # Extraction du contenu
-                    result_content = self._extract_content(result)
-                    
-                    # Stocker le résultat
-                    task_results[current_task] = {
-                        "agent": selected_agent.name,
-                        "result": result_content
+                    # Préparer le message de progression pour RabbitMQ
+                    progress_message = {
+                        'execution_id': execution_id,
+                        'task_id': task_ledger.task_id if hasattr(task_ledger, 'task_id') else None,
+                        'current_subtask': task,
+                        'subtask_index': task_index,
+                        'total_subtasks': len(task_ledger.current_plan),
+                        'status': 'subtask_started',
+                        'timestamp': datetime.now().isoformat()
                     }
                     
+                    # Publier le message dans la queue de progression
+                    self._publish_rabbitmq_message('queue_progress_task', progress_message)
+                    
+                    # Logs détaillés sur la sous-tâche
+                    logger.info(f"🚀 Exécution de la sous-tâche {task_index}/{len(task_ledger.current_plan)}")
+                    logger.info(f"📝 Tâche : {task}")
+                    logger.info(f"🔍 Agents disponibles : {list(self.agents.keys())}")
+                    logger.info(f"🤖 Agent sélectionné : {selected_agent.name}")
+                    
+                    # Exécuter la sous-tâche de manière asynchrone
+                    try:
+                        # Utiliser run() de manière asynchrone
+                        result = await selected_agent.arun(task)
+                    except TypeError:
+                        # Fallback sur l'exécution synchrone si arun n'est pas disponible
+                        result = selected_agent.run(task)
+                    
+                    # Stocker le résultat
+                    task_results[task] = {
+                        'result': result,
+                        'agent': selected_agent.__class__.__name__
+                    }
+                    
+                    # Log de succès
                     logger.info(f"✅ Sous-tâche {task_index} terminée")
-                    logger.info(f"📊 Résultat : {result_content[:200]}...")
-                
+                    logger.info(f"📊 Résultat : {str(result)[:200]}...")
+                    
                 except Exception as task_error:
                     logger.error(f"❌ Erreur lors de l'exécution de la sous-tâche {task_index} : {task_error}")
                     logger.error(traceback.format_exc())
                     
-                    task_results[current_task] = {
-                        "error": str(task_error),
-                        "traceback": traceback.format_exc()
+                    task_results[task] = {
+                        'result': f"Erreur : {str(task_error)}",
+                        'agent': 'error',
+                        'traceback': traceback.format_exc()
                     }
             
-            logger.info("🏁 Exécution de toutes les sous-tâches terminée")
+            # Synthétiser les résultats
+            try:
+                synthesized_result = await self._synthesize_results(task_results)
+                logger.info("🏁 Exécution de toutes les sous-tâches terminée")
+                logger.info(f"📋 Résultat synthétisé : {str(synthesized_result)[:200]}...")
+            except Exception as synthesis_error:
+                logger.error(f"❌ Erreur lors de la synthèse : {synthesis_error}")
+                synthesized_result = "Désolé, je n'ai pas pu synthétiser les résultats."
             
-            return task_results
+            return {
+                'task_results': task_results,
+                'synthesized_result': synthesized_result
+            }
         
-        except Exception as global_error:
-            logger.error(f"❌ Erreur globale lors de l'exécution des tâches : {global_error}")
+        except Exception as e:
+            logger.error(f"❌ Erreur globale lors de l'exécution des tâches : {e}")
             logger.error(traceback.format_exc())
             
             return {
-                "error": str(global_error),
-                "task_results": task_results
+                'task_results': {},
+                'synthesized_result': "Erreur lors de l'exécution des tâches."
             }
 
     async def process_request(
@@ -949,51 +928,199 @@ Task Ledger généré :
             Dict[str, Any]: Résultats du traitement
         """
         try:
-            # Décomposition de la tâche
-            task_ledger = await self.decompose_task(user_request)
+            # Décider si la tâche nécessite une décomposition
+            needs_decomposition = self.should_decompose_task(user_request)
+            logger.info(f"🔍 Décomposition requise : {needs_decomposition}")
             
-            # Exécution des sous-tâches
-            task_results = await self.execute_task(task_ledger)
-            
-            # Synthèse des résultats
-            synthesis_result = await self._synthesize_results(task_results)
-            
-            return {
-                "task_ledger": task_ledger.to_json(),
-                "task_results": task_results,
-                "final_result": synthesis_result
-            }
+            # Sélectionner le mode de traitement
+            if needs_decomposition:
+                # Décomposer la tâche en sous-tâches
+                task_ledger = await self.decompose_task(user_request)
+                
+                # Exécuter les sous-tâches
+                task_results = await self.execute_task(task_ledger)
+                
+                # Synthétiser les résultats
+                synthesized_result = await self._synthesize_results(list(task_results.values()))
+                
+                return {
+                    'task_results': task_results,
+                    'synthesized_result': synthesized_result
+                }
+            else:
+                # Traitement direct sans décomposition
+                best_agent = self._select_best_agent(user_request)
+                
+                # Vérifier si l'agent a une méthode run asynchrone
+                if asyncio.iscoroutinefunction(best_agent.run):
+                    task_result = await best_agent.run(user_request)
+                else:
+                    # Exécution synchrone si nécessaire
+                    task_result = best_agent.run(user_request)
+                
+                return {
+                    'task_results': {'main_task': task_result},
+                    'synthesized_result': task_result.content if hasattr(task_result, 'content') else str(task_result)
+                }
         
         except Exception as e:
-            logger.error(f"❌ Erreur lors du traitement de la requête : {e}")
-            logger.error(traceback.format_exc())
-            
+            logger.error(f"Erreur lors du traitement de la requête : {e}")
             return {
-                "error": str(e),
-                "traceback": traceback.format_exc()
+                "error": f"Erreur lors du traitement de la requête : {e}",
+                "query": user_request,
+                "result": None
             }
 
-    async def _synthesize_results(self, task_results: Dict[str, Any]) -> str:
+    async def _synthesize_results(
+        self, 
+        subtask_results: List[Union[RunResponse, Dict, str]]
+    ) -> str:
         """
-        Synthétiser les résultats des sous-tâches
+        Synthétiser les résultats de plusieurs sous-tâches
         
         Args:
-            task_results (Dict[str, Any]): Résultats des sous-tâches
+            subtask_results (List[Union[RunResponse, Dict, str]]): Liste des résultats de sous-tâches
         
         Returns:
-            str: Synthèse des résultats
+            str: Résultat synthétisé
         """
+        logger.info("🏁 Début de la synthèse des résultats")
+        
         try:
-            synthesis_prompt = TASK_CONTEXT_PROMPT.format(
-                task=self.task_ledger.original_request,
-                context=json.dumps(task_results)
+            # Vérifier si les résultats sont des coroutines
+            processed_results = []
+            for result in subtask_results:
+                # Attendre si c'est une coroutine
+                if asyncio.iscoroutine(result):
+                    result = await result
+                
+                # Extraction robuste du contenu
+                if hasattr(result, 'content'):
+                    processed_results.append(result.content)
+                elif isinstance(result, dict) and 'result' in result:
+                    processed_results.append(str(result['result']))
+                elif isinstance(result, str):
+                    processed_results.append(result)
+                else:
+                    processed_results.append(str(result))
+            
+            # Synthétiser les résultats
+            synthesis_prompt = f"""
+            Synthétise les résultats suivants de manière claire et concise :
+            
+            Résultats : {processed_results}
+            
+            Assure-toi de :
+            - Présenter un résultat final cohérent
+            - Conserver l'ordre des sous-tâches
+            - Être précis et direct
+            """
+            
+            # Utiliser le client OpenAI pour la synthèse
+            synthesis_response = self.client.chat.completions.create(
+                model=self.llm_config['model'],
+                messages=[
+                    {"role": "system", "content": "Tu es un assistant qui synthétise des résultats de sous-tâches."},
+                    {"role": "user", "content": synthesis_prompt}
+                ],
+                temperature=0.2,
+                max_tokens=300
             )
             
-            return self.agent.run(synthesis_prompt)
+            # Extraire le contenu de la synthèse
+            synthesized_result = synthesis_response.choices[0].message.content.strip()
+            
+            logger.info(f"📋 Résultat synthétisé : {synthesized_result}")
+            return synthesized_result
         
         except Exception as e:
             logger.error(f"❌ Erreur lors de la synthèse des résultats : {e}")
-            return "Impossible de synthétiser les résultats."
+            return "Désolé, je n'ai pas pu synthétiser les résultats correctement."
+
+    def _generate_detailed_subtasks(self, user_request: str) -> List[Dict[str, Any]]:
+        """
+        Générer des sous-tâches détaillées pour une requête utilisateur
+        
+        Args:
+            user_request (str): La requête originale de l'utilisateur
+        
+        Returns:
+            List[Dict[str, Any]]: Liste des sous-tâches détaillées
+        """
+        try:
+            # Préparer le prompt pour la génération de sous-tâches
+            subtasks_prompt = f"""
+            Décompose la requête suivante en sous-tâches précises et réalisables :
+            
+            Requête : {user_request}
+            
+            Instructions :
+            - Divise la tâche en étapes concrètes et mesurables
+            - Chaque sous-tâche doit être claire et réalisable
+            - Inclure des détails sur l'objectif de chaque sous-tâche
+            - Estimer un temps approximatif pour chaque sous-tâche
+            
+            Format de réponse REQUIS (JSON strict) :
+            {{
+                "subtasks": [
+                    {{
+                        "task_id": "identifiant_unique",
+                        "description": "Description détaillée de la sous-tâche",
+                        "estimated_time": "Temps estimé",
+                        "priority": "haute/moyenne/basse",
+                        "required_skills": ["compétences requises"]
+                    }}
+                ]
+            }}
+            """
+            
+            # Générer les sous-tâches directement avec le client OpenAI
+            response = self.client.chat.completions.create(
+                model=self.llm_config.get('model', 'gpt-4o-mini'),
+                messages=[
+                    {"role": "system", "content": "Tu es un expert en décomposition de tâches complexes."},
+                    {"role": "user", "content": subtasks_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2
+            )
+            
+            # Extraire le contenu de la réponse
+            subtasks_response = response.choices[0].message.content
+            
+            # Vérifier que la réponse est une chaîne
+            if not isinstance(subtasks_response, str):
+                logger.error(f"La réponse du modèle n'est pas une chaîne : {type(subtasks_response)}")
+                raise ValueError("Réponse du modèle invalide")
+            
+            # Convertir la réponse en liste de sous-tâches
+            try:
+                subtasks_dict = json.loads(subtasks_response)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Erreur de décodage JSON : {json_err}")
+                logger.error(f"Réponse reçue : {subtasks_response}")
+                raise
+            
+            subtasks = subtasks_dict.get('subtasks', [])
+            
+            # Vérifier que le format est correct
+            if not isinstance(subtasks, list):
+                raise ValueError("La réponse n'est pas une liste de sous-tâches")
+
+            return subtasks
+        
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération des sous-tâches : {e}")
+            # Retourner une décomposition par défaut si la génération échoue
+            return [
+                {
+                    "task_id": "task_1",
+                    "description": f"Analyser la requête : {user_request}",
+                    "estimated_time": "1 heure",
+                    "priority": "haute",
+                    "required_skills": ["compréhension", "analyse"]
+                }
+            ]
 
 async def process_user_request(
     user_request: str, 
@@ -1029,68 +1156,98 @@ async def process_user_request(
         }
 
 def get_orchestrator_agent(
-    model_id: str = "gpt-4o-mini"
-) -> Agent:
+    model_id: str = "gpt-4o-mini",
+    enable_web_agent: bool = True,
+    enable_api_knowledge_agent: bool = False,
+    enable_data_analysis_agent: bool = False,
+    enable_travel_planner: bool = False
+) -> OrchestratorAgent:
     """
-    Créer et configurer l'agent orchestrateur principal
+    Créer un agent orchestrateur avec configuration personnalisable
     
     Args:
-        model_id (str): Identifiant du modèle OpenAI à utiliser
+        model_id (str): Identifiant du modèle OpenAI
+        enable_web_agent (bool): Activer l'agent de recherche web
+        enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
+        enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
+        enable_travel_planner (bool): Activer l'agent de planification de voyage
     
     Returns:
-        Agent: Agent orchestrateur configuré
+        OrchestratorAgent: Agent orchestrateur configuré
     """
-    web_agent = get_web_searcher(
-        model_id=agent_settings.gpt_4,
-        debug_mode=False
-    )
-    api_knowledge_agent = get_api_knowledge_agent(
-        debug_mode=False,
-        user_id=None,
-        session_id=None
-    )
-    data_analysis_agent = get_data_analysis_agent(
-        debug_mode=False
-    )
-    travel_planner = get_travel_planner(
-        debug_mode=False
-    )
-
-    return Agent(
-        name="Advanced Task Orchestrator",
-        role="Décomposer et coordonner des tâches complexes de manière autonome",
-        model=OpenAIChat(
-            id=model_id,
-            max_tokens=agent_settings.default_max_completion_tokens,
-            temperature=0.7  # Plus créatif pour la décomposition
-        ),
-        instructions=[
-            "Tu es un agent d'orchestration avancé capable de décomposer des tâches complexes.",
-            "Étapes de travail :",
-            "1. Analyser la requête originale",
-            "2. Décomposer la requête en sous-tâches précises et réalisables",
-            "3. Attribuer chaque sous-tâche à l'agent le plus approprié",
-            "4. Suivre la progression de chaque sous-tâche",
-            "5. Intégrer et synthétiser les résultats partiels",
-            "6. Adapter dynamiquement le plan si nécessaire"
-        ],
-        tools=[
-            PythonTools(),
-            DuckDuckGo()
-        ],
-        team=[
-            web_agent,
-            api_knowledge_agent,
-            data_analysis_agent,
-            travel_planner
-        ]
+    return OrchestratorAgent(
+        model_id=model_id,
+        enable_web_agent=enable_web_agent,
+        enable_api_knowledge_agent=enable_api_knowledge_agent,
+        enable_data_analysis_agent=enable_data_analysis_agent,
+        enable_travel_planner=enable_travel_planner
     )
 
 # Exemple d'utilisation
 if __name__ == "__main__":
-    import asyncio
-    async def main():
-        test_request = "Trouve des informations sur l'intelligence artificielle et résume-les"
-        result = await process_user_request(test_request, debug_mode=True)
-        print(result)
-    asyncio.run(main())
+    import logging
+    import json
+
+    # Configuration du logging
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    def extract_content(chunk):
+        """
+        Extraire le contenu textuel d'un chunk de différents types
+        """
+        # Si c'est un tuple
+        if isinstance(chunk, tuple):
+            # Si le tuple a plus d'un élément, prendre le deuxième
+            if len(chunk) > 1:
+                chunk = chunk[1]
+            else:
+                chunk = ""
+        
+        # Si c'est une liste, convertir en chaîne
+        if isinstance(chunk, list):
+            chunk = " ".join(str(item) for item in chunk)
+        
+        # Convertir en chaîne si ce n'est pas déjà une chaîne
+        return str(chunk)
+
+    def test_orchestrator():
+        # Créer l'agent orchestrateur sans agent web
+        orchestrator = get_orchestrator_agent(
+            enable_web_agent=True  # Activer la recherche web
+        )
+        
+        # Exemples de requêtes de test
+        test_requests = [
+            "Faire une analyse comparative des performances des startups tech en 2024"
+        ]
+        
+        for request in test_requests:
+            print(f"\n🚀 Traitement de la requête : {request}")
+            
+            # Utiliser la génération de réponse directe
+            try:
+                # Récupérer le générateur de réponse
+                resp = orchestrator.run(request)
+                
+                # Collecter et afficher les résultats par morceaux
+                print("\n📊 Résultats :")
+                full_result = ""
+                for chunk in resp:
+                    # Extraire le contenu du chunk
+                    chunk_content = extract_content(chunk)
+                    
+                    print(chunk_content, end='', flush=True)
+                    full_result += chunk_content
+                
+                print("\n\n🔍 Résumé :")
+                print(f"Longueur totale de la réponse : {len(full_result)} caractères")
+            except Exception as e:
+                print(f"Erreur lors de l'exécution : {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # Exécuter le test
+    test_orchestrator()
