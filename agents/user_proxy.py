@@ -305,7 +305,7 @@ class UserProxyAgent:
         method: pika.spec.Basic.Deliver, 
         properties: pika.spec.BasicProperties, 
         body: bytes
-    ) -> None:
+    ):
         """
         Traite un message de progression de tâche.
         
@@ -316,34 +316,24 @@ class UserProxyAgent:
             body (bytes): Corps du message
         """
         try:
-            # Décoder le message JSON
+            # Décoder le message
             message = json.loads(body.decode('utf-8'))
             
             # Extraire les informations de progression
-            task_id = message.get('task_id')
-            current_step = message.get('current_step')
-            total_steps = message.get('total_steps')
-            source_agent = message.get('source_agent', 'unknown')
-            additional_info = message.get('additional_info', {})
-            
-            # Mettre à jour l'état des tâches en cours
-            if task_id:
-                self._ongoing_tasks[task_id] = {
-                    'current_step': current_step,
-                    'total_steps': total_steps,
-                    'source_agent': source_agent,
-                    'additional_info': additional_info
-                }
+            request_id = message.get('request_id')
+            task_type = message.get('task_type')
+            status = message.get('status')
+            result = message.get('result', {})
             
             # Générer un message de progression utilisateur
             progress_message = (
-                f"Progression de la tâche {task_id} par {source_agent} : "
-                f"Étape {current_step}/{total_steps}"
+                f"Progression de la tâche {request_id} ({task_type}) : "
+                f"État {status}"
             )
             
-            # Ajouter des informations supplémentaires si disponibles
-            if additional_info:
-                progress_message += f"\nDétails : {additional_info}"
+            # Ajouter des détails supplémentaires si disponibles
+            if result:
+                progress_message += f"\nDétails : {result}"
             
             # Afficher le message de progression
             logger.info(progress_message)
@@ -352,9 +342,9 @@ class UserProxyAgent:
             channel.basic_ack(delivery_tag=method.delivery_tag)
         
         except Exception as e:
-            logger.error(f"Erreur de traitement de la progression : {e}")
-            # En cas d'erreur, rejeter le message sans le replacer dans la queue
-            channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+            logger.error(f"Erreur lors du traitement du message de progression : {e}")
+            # Rejeter le message en cas d'erreur
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _publish_response(
         self, 
