@@ -70,6 +70,7 @@ class TaskLedger:
     Registre pour gérer les faits et le plan de tâches
     """
     original_request: str
+    task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     initial_plan: List[str] = field(default_factory=list)
     _current_plan: List[str] = field(default_factory=list, repr=False)
     facts: Dict[str, Any] = field(default_factory=lambda: {
@@ -129,6 +130,7 @@ class TaskLedger:
         Convertir le TaskLedger en format JSON
         """
         return {
+            "task_id": self.task_id,
             "original_request": self.original_request,
             "initial_plan": self.initial_plan,
             "current_plan": self.current_plan,
@@ -753,6 +755,63 @@ class OrchestratorAgent:
             logger.error(f"Erreur inattendue lors de la publication RabbitMQ : {e}")
             return False
 
+    def _create_task_message(
+        self, 
+        task_type: str, 
+        request_id: str, 
+        sub_task_id: Optional[str] = None,
+        original_request: Optional[str] = None,
+        description: Optional[str] = None,
+        subtasks: Optional[List[Dict[str, Any]]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        status: str = 'pending'
+    ) -> Dict[str, Any]:
+        """
+        Créer un message standardisé pour les tâches, sous-tâches et synthèse.
+        
+        Args:
+            task_type (str): Type de tâche ('task', 'subtask', 'synthesis')
+            request_id (str): ID unique de la demande
+            sub_task_id (str, optional): ID de la sous-tâche
+            original_request (str, optional): Requête originale
+            description (str, optional): Description de la tâche
+            subtasks (List[Dict], optional): Liste des sous-tâches
+            result (Dict, optional): Résultat de la tâche
+            status (str, optional): Statut de la tâche
+        
+        Returns:
+            Dict[str, Any]: Message standardisé
+        """
+        message = {
+            'message_type': 'task_progress',
+            'task_type': task_type,
+            'request_id': request_id,
+            'sub_task_id': sub_task_id,
+            'status': status,
+            'timestamp': datetime.now().isoformat(),
+            'metadata': {
+                'original_request': original_request,
+                'description': description
+            }
+        }
+        
+        # Ajouter des informations spécifiques selon le type de tâche
+        if subtasks:
+            message['subtasks'] = [
+                {
+                    'sub_task_id': subtask.get('sub_task_id', str(uuid.uuid4())),
+                    'description': subtask.get('description'),
+                    'status': subtask.get('status', 'pending')
+                } 
+                for subtask in subtasks
+            ]
+            message['total_subtasks'] = len(subtasks)
+        
+        if result:
+            message['result'] = result
+        
+        return message
+
     async def decompose_task(self, user_request: str) -> TaskLedger:
         """
         Décomposer la requête utilisateur en sous-tâches avec function calling
@@ -764,11 +823,12 @@ class OrchestratorAgent:
             TaskLedger: Le registre de tâches mis à jour
         """
         try:
-            # Générer un ID unique pour la tâche
-            task_id = str(uuid.uuid4())
-            
             # Décomposer la tâche
             detailed_subtasks = self._generate_detailed_subtasks(user_request)
+            
+            # Ajouter des sub_task_id aux sous-tâches
+            for subtask in detailed_subtasks:
+                subtask['sub_task_id'] = str(uuid.uuid4())
             
             # Mettre à jour le TaskLedger
             self.task_ledger.current_plan = [
@@ -776,18 +836,17 @@ class OrchestratorAgent:
                 for subtask in detailed_subtasks
             ]
             
-            # Préparer le message de progression pour RabbitMQ
-            progress_message = {
-                'task_id': task_id,
-                'original_request': user_request,
-                'total_subtasks': len(detailed_subtasks),
-                'subtasks': detailed_subtasks,
-                'status': 'started',
-                'timestamp': datetime.now().isoformat()
-            }
+            # Préparer le message de tâche principal
+            task_message = self._create_task_message(
+                task_type='task',
+                request_id=self.task_ledger.task_id,
+                original_request=user_request,
+                subtasks=detailed_subtasks,
+                status='started'
+            )
             
             # Publier le message dans la queue de progression
-            self._publish_rabbitmq_message('queue_progress_task', progress_message)
+            self._publish_rabbitmq_message('queue_progress_task', task_message)
             
             return self.task_ledger
         
@@ -800,7 +859,7 @@ class OrchestratorAgent:
         self, 
         task_ledger: TaskLedger, 
         dev_mode: bool = False
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """
         Exécuter les sous-tâches de manière unifiée
         
@@ -809,91 +868,50 @@ class OrchestratorAgent:
             dev_mode (bool): Mode développement qui simule l'exécution
         
         Returns:
-            Dict[str, Any]: Résultats de l'exécution des tâches
+            List[Dict[str, Any]]: Résultats des sous-tâches
         """
-        try:
-            # Initialiser le dictionnaire des résultats
-            task_results = {}
-            
-            # Exécuter chaque sous-tâche
-            for task_index, task in enumerate(task_ledger.current_plan, 1):
-                try:
-                    # Sélectionner l'agent le plus approprié
-                    selected_agent = self._select_best_agent(task)
-                    
-                    # Exécuter la sous-tâche de manière asynchrone
-                    try:
-                        # Utiliser arun() de manière asynchrone
-                        result = await selected_agent.arun(task)
-                    except AttributeError:
-                        # Lever une exception si arun() n'est pas disponible
-                        raise RuntimeError(f"L'agent {selected_agent.name} ne supporte pas l'exécution asynchrone")
-                    
-                    # Stocker le résultat
-                    task_results[task] = {
-                        "agent": selected_agent.name,
-                        "result": {
-                            "content": result.content,
-                            "content_type": result.content_type,
-                            "event": result.event,
-                            "messages": [
-                                {
-                                    "role": msg.role, 
-                                    "content": msg.content
-                                } for msg in result.messages
-                            ] if result.messages else []
-                        },
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    
-                    # Publier le message dans la queue de progression avec le résultat
-                    progress_message = {
-                        "task_index": task_index,
-                        "total_tasks": len(task_ledger.current_plan),
-                        "task": task,
-                        "agent": selected_agent.name,
-                        "status": "completed",
-                        "result": task_results[task]["result"],
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    self._publish_rabbitmq_message('queue_progress_task', progress_message)
-                    
-                    # Log de succès
-                    logger.info(f"✅ Sous-tâche {task_index} terminée")
-                    logger.info(f"📊 Résultat : {str(result)[:200]}...")
-                    
-                except Exception as task_error:
-                    logger.error(f"❌ Erreur lors de l'exécution de la sous-tâche {task_index} : {task_error}")
-                    logger.error(traceback.format_exc())
-                    
-                    task_results[task] = {
-                        'result': f"Erreur : {str(task_error)}",
-                        'agent': 'error',
-                        'traceback': traceback.format_exc()
-                    }
-            
-            # Synthétiser les résultats
-            try:
-                synthesized_result = await self._synthesize_results(list(task_results.values()))
-                logger.info("🏁 Exécution de toutes les sous-tâches terminée")
-                logger.info(f"📋 Résultat synthétisé : {str(synthesized_result)[:200]}...")
-            except Exception as synthesis_error:
-                logger.error(f"❌ Erreur lors de la synthèse : {synthesis_error}")
-                synthesized_result = "Désolé, je n'ai pas pu synthétiser les résultats."
-            
-            return {
-                'task_results': task_results,
-                'synthesized_result': synthesized_result
-            }
+        subtask_results = []
         
+        try:
+            # Parcourir les sous-tâches du registre
+            for task_index, task in enumerate(task_ledger.current_plan, 1):
+                # Sélectionner dynamiquement l'agent
+                selected_agent = self._select_best_agent(task)
+                
+                # Générer un ID unique pour cette sous-tâche
+                sub_task_id = str(uuid.uuid4())
+                
+                # Exécuter la sous-tâche
+                result = await selected_agent.arun(task)
+                
+                # Préparer le message de résultat de sous-tâche
+                subtask_result_message = self._create_task_message(
+                    task_type='subtask',
+                    request_id=task_ledger.task_id,
+                    sub_task_id=sub_task_id,
+                    original_request=task,
+                    status='completed',
+                    result={
+                        "content": result.content,
+                        "content_type": result.content_type,
+                        "agent": selected_agent.name
+                    }
+                )
+                
+                # Publier le message de résultat de sous-tâche
+                self._publish_rabbitmq_message('queue_progress_task', subtask_result_message)
+                
+                # Stocker le résultat
+                subtask_results.append({
+                    'result': result.content,
+                    'agent': selected_agent.name
+                })
+        
+            return subtask_results
+    
         except Exception as e:
-            logger.error(f"❌ Erreur globale lors de l'exécution des tâches : {e}")
-            logger.error(traceback.format_exc())
-            
-            return {
-                'task_results': {},
-                'synthesized_result': "Erreur lors de l'exécution des tâches."
-            }
+            logger.error(f"❌ Erreur lors de l'exécution des tâches : {e}")
+            return []
 
     async def process_request(
         self, 
@@ -911,100 +929,82 @@ class OrchestratorAgent:
             Dict[str, Any]: Résultats du traitement
         """
         try:
-            # Décider si la tâche nécessite une décomposition
-            needs_decomposition = self.should_decompose_task(user_request)
-            logger.info(f"🔍 Décomposition requise : {needs_decomposition}")
+            # Décomposer la tâche
+            task_ledger = await self.decompose_task(user_request)
             
-            # Sélectionner le mode de traitement
-            if needs_decomposition:
-                # Décomposer la tâche en sous-tâches
-                task_ledger = await self.decompose_task(user_request)
-                
-                # Exécuter les sous-tâches
-                task_results = await self.execute_task(task_ledger)
-                
-                return task_results
+            # Exécuter les sous-tâches
+            subtask_results = await self.execute_task(task_ledger)
             
-            # Si pas de décomposition, exécuter directement
-            selected_agent = self._select_best_agent(user_request)
-            result = await selected_agent.arun(user_request)
+            # Synthétiser les résultats
+            synthesized_result = await self._synthesize_results(subtask_results)
             
-            # Préparer le message RabbitMQ
-            task_result_message = {
-                "task_index": 1,
-                "total_tasks": 1,
-                "task": user_request,
-                "agent": selected_agent.name,
-                "status": "completed",
-                "result": {
-                    "content": result.content,
-                    "content_type": result.content_type,
-                    "event": result.event,
-                    "messages": [
-                        {
-                            "role": msg.role, 
-                            "content": msg.content
-                        } for msg in result.messages
-                    ] if result.messages else []
-                },
-                "timestamp": datetime.now().isoformat()
-            }
+            # Publier un message RabbitMQ avec la synthèse
+            synthesis_message = self._create_task_message(
+                task_type='synthesis',
+                request_id=task_ledger.task_id,
+                original_request=user_request,
+                status='completed',
+                result={
+                    "content": synthesized_result,
+                    "content_type": "text/plain"
+                }
+            )
             
-            # Publier le message dans la queue de progression
-            self._publish_rabbitmq_message('queue_progress_task', task_result_message)
+            # Publier le message de synthèse
+            self._publish_rabbitmq_message('queue_progress_task', synthesis_message)
             
             # Log détaillé
-            logger.info(f"📊 Résultat complet : {result}")
-            logger.info(f"📝 Contenu : {result.content}")
+            logger.info(f"📊 Résultat synthétisé : {synthesized_result}")
             
             return {
-                'task_results': {user_request: result},
-                'synthesized_result': result.content
+                'query': user_request,
+                'result': synthesized_result,
+                'agent_used': 'Multi-Purpose Intelligence Team',
+                'metadata': {},
+                'error': None,
+                'task_id': task_ledger.task_id
             }
         
         except Exception as e:
-            logger.error(f"Erreur lors du traitement de la requête : {e}")
-            logger.error(traceback.format_exc())
-            
+            logger.error(f"❌ Erreur lors du traitement de la requête : {e}")
             return {
-                'task_results': {},
-                'synthesized_result': "Erreur lors du traitement de la requête."
+                'query': user_request,
+                'result': '',
+                'agent_used': 'Multi-Purpose Intelligence Team',
+                'metadata': {},
+                'error': str(e),
+                'task_id': None
             }
 
     async def _synthesize_results(
         self, 
-        subtask_results: List[Union[RunResponse, Dict, str]]
+        subtask_results: List[Dict[str, Any]]
     ) -> str:
         """
         Synthétiser les résultats de plusieurs sous-tâches
         
         Args:
-            subtask_results (List[Union[RunResponse, Dict, str]]): Liste des résultats de sous-tâches
+            subtask_results (List[Dict[str, Any]]): Liste des résultats de sous-tâches
         
         Returns:
             str: Résultat synthétisé
         """
         logger.info("🏁 Début de la synthèse des résultats")
         
-        # Convertir les résultats en format texte si nécessaire
-        text_results = []
-        for result in subtask_results:
-            # Gérer différents types de résultats
-            if isinstance(result, RunResponse):
-                text_results.append(result.content)
-            elif isinstance(result, dict):
-                # Extraire le contenu du résultat
-                content = result.get('result', {})
-                if isinstance(content, dict):
-                    text_results.append(content.get('content', str(content)))
-                else:
-                    text_results.append(str(content))
-            else:
-                text_results.append(str(result))
+        # Convertir les résultats en format texte
+        text_results = [
+            result.get('result', '') 
+            for result in subtask_results 
+            if result.get('result')
+        ]
         
         # Cas spécial : résultat unique
         if len(text_results) == 1:
             return text_results[0]
+        
+        # Cas où aucun résultat n'est disponible
+        if not text_results:
+            return "Aucun résultat n'a pu être généré."
         
         # Utiliser l'agent orchestrateur pour synthétiser
         synthesis_prompt = f"""
@@ -1018,36 +1018,14 @@ class OrchestratorAgent:
         - Sois concis mais informatif
         """
         
+        # Utiliser le modèle pour générer la synthèse
         try:
-            # Essayer d'utiliser arun() en premier
             synthesis_response = await self.agent.arun(synthesis_prompt)
-            synthesized_result = synthesis_response.content
-        except Exception:
-            # Fallback à la méthode synchrone
-            synthesis_response = self.agent(synthesis_prompt)
-            synthesized_result = synthesis_response.choices[0].message.content.strip()
-        
-        # Publier un message RabbitMQ avec la synthèse
-        try:
-            synthesis_message = {
-                "task_index": "synthesis",
-                "total_tasks": len(subtask_results),
-                "task": "Result Synthesis",
-                "agent": "OrchestratorAgent",
-                "status": "completed",
-                "result": {
-                    "content": synthesized_result,
-                    "content_type": "text/plain",
-                    "messages": []
-                },
-                "timestamp": datetime.now().isoformat()
-            }
-            self._publish_rabbitmq_message('queue_progress_task', synthesis_message)
+            return synthesis_response.content
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la publication de la synthèse : {e}")
-        
-        logger.info(f"📋 Résultat synthétisé : {synthesized_result}")
-        return synthesized_result
+            logger.error(f"❌ Erreur lors de la synthèse : {e}")
+            # Retourner une synthèse par défaut en cas d'erreur
+            return " | ".join(text_results)
 
     def _generate_detailed_subtasks(self, user_request: str) -> List[Dict[str, Any]]:
         """
@@ -1159,7 +1137,7 @@ async def process_user_request(
         )
         
         # Extraction de la synthèse
-        synthesized_result = result.get('synthesized_result', '')
+        synthesized_result = result.get('result', '')
         
         # Détermination de l'agent utilisé
         agent_used = 'Multi-Purpose Intelligence Team'
@@ -1184,8 +1162,8 @@ async def process_user_request(
                 # Essayer d'extraire le contenu de différentes manières
                 if 'result' in task_result:
                     result_content = task_result['result']
-                    if isinstance(result_content, dict) and 'content' in result_content:
-                        synthesized_result = result_content['content']
+                    if isinstance(result_content, dict):
+                        synthesized_result = result_content.get('content', str(result_content))
                     elif isinstance(result_content, str):
                         synthesized_result = result_content
                 

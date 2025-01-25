@@ -1,15 +1,18 @@
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Union
 from phi.agent import Agent
 from phi.llm.openai import OpenAIChat
-from phi.tools import WebSearch
-from phi.tools.python import PythonTools
 import logging
 import queue
 import threading
 import uuid
-import pika
 import json
 from datetime import datetime
+import os
+from pika.spec import Basic, BasicProperties
+
+# Importer pika correctement
+import pika
+from pika.adapters.blocking_connection import BlockingChannel
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -52,10 +55,6 @@ class UserProxyAgent:
                 "3. Gérer les demandes de clarification",
                 "4. Suivre et communiquer l'avancement des traitements",
                 "5. Communiquer de manière claire et professionnelle"
-            ],
-            tools=[
-                WebSearch(),
-                PythonTools()
             ],
             debug_mode=debug_mode
         )
@@ -300,17 +299,26 @@ class UserProxyAgent:
                 'message': str(e)
             }
     
-    async def _process_progress_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_progress_message(
+        self, 
+        channel: BlockingChannel, 
+        method: pika.spec.Basic.Deliver, 
+        properties: pika.spec.BasicProperties, 
+        body: bytes
+    ) -> None:
         """
         Traite un message de progression de tâche.
         
         Args:
-            message (dict): Message de progression
-        
-        Returns:
-            dict: Résultat du traitement de progression
+            channel (BlockingChannel): Canal RabbitMQ
+            method (pika.spec.Basic.Deliver): Méthode de livraison
+            properties (pika.spec.BasicProperties): Propriétés du message
+            body (bytes): Corps du message
         """
         try:
+            # Décoder le message JSON
+            message = json.loads(body.decode('utf-8'))
+            
             # Extraire les informations de progression
             task_id = message.get('task_id')
             current_step = message.get('current_step')
@@ -337,18 +345,16 @@ class UserProxyAgent:
             if additional_info:
                 progress_message += f"\nDétails : {additional_info}"
             
-            return {
-                'status': 'progress_processed',
-                'task_id': task_id,
-                'progress_message': progress_message
-            }
+            # Afficher le message de progression
+            logger.info(progress_message)
+            
+            # Acquitter le message
+            channel.basic_ack(delivery_tag=method.delivery_tag)
         
         except Exception as e:
             logger.error(f"Erreur de traitement de la progression : {e}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+            # En cas d'erreur, rejeter le message sans le replacer dans la queue
+            channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
     
     def _publish_response(
         self, 
@@ -383,6 +389,51 @@ class UserProxyAgent:
         
         except Exception as e:
             logger.error(f"Erreur lors de la publication du message : {e}")
+
+    def start_progress_listener(
+        self, 
+        queue_name: str = 'queue_progress_task'
+    ) -> None:
+        """
+        Démarre l'écoute continue des messages de progression sur RabbitMQ.
+        
+        Args:
+            queue_name (str): Nom de la queue à écouter
+        """
+        try:
+            # Établir la connexion RabbitMQ
+            connection_params = pika.ConnectionParameters(
+                host=os.getenv('RABBITMQ_HOST', 'localhost'),
+                port=int(os.getenv('RABBITMQ_PORT', 5672)),
+                virtual_host=os.getenv('RABBITMQ_VHOST', '/'),
+                credentials=pika.PlainCredentials(
+                    username=os.getenv('RABBITMQ_USER', 'guest'),
+                    password=os.getenv('RABBITMQ_PASSWORD', 'guest')
+                )
+            )
+            
+            # Créer une connexion et un canal
+            connection = pika.BlockingConnection(connection_params)
+            channel: BlockingChannel = connection.channel()
+            
+            # Déclarer la queue
+            channel.queue_declare(queue=queue_name, durable=True)
+            
+            # Configuration du consumer
+            channel.basic_consume(
+                queue=queue_name, 
+                on_message_callback=self._process_progress_message,
+                auto_ack=False  # Gestion manuelle des acquittements
+            )
+            
+            logger.info(f"🚀 Début de l'écoute sur la queue {queue_name}")
+            
+            # Démarrer la consommation
+            channel.start_consuming()
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur lors du démarrage de l'écoute RabbitMQ : {e}")
+            # Gérer la reconnexion ou la reprise
 
     def route_request(
         self, 
@@ -456,146 +507,6 @@ class UserProxyAgent:
                 "original_request": request
             }
 
-    def track_complex_task(
-        self, 
-        task_description: str, 
-        subtasks: List[Dict[str, Any]]
-    ) -> str:
-        """
-        Suit une tâche complexe décomposée en sous-tâches.
-        
-        Args:
-            task_description (str): Description de la tâche principale
-            subtasks (list): Liste des sous-tâches à suivre
-        
-        Returns:
-            str: ID unique de la tâche complexe
-        """
-        # Générer un ID unique pour la tâche
-        task_id = str(uuid.uuid4())
-        
-        # Préparer la structure de suivi de la tâche
-        complex_task = {
-            'task_id': task_id,
-            'description': task_description,
-            'total_subtasks': len(subtasks),
-            'completed_subtasks': 0,
-            'subtasks': subtasks,
-            'status': 'in_progress',
-            'created_at': datetime.now().isoformat()
-        }
-        
-        # Stocker la tâche complexe
-        self._ongoing_tasks[task_id] = complex_task
-        
-        # Publier un message de progression initial
-        initial_progress_message = {
-            'task_id': task_id,
-            'current_step': 0,
-            'total_steps': len(subtasks),
-            'status': 'started',
-            'description': task_description
-        }
-        
-        # Ajouter à la file de progression
-        self.enqueue_clarification_request(
-            initial_progress_message, 
-            queue_type='progress'
-        )
-        
-        return task_id
-    
-    def update_complex_task(
-        self, 
-        task_id: str, 
-        subtask_index: int, 
-        status: str = 'completed',
-        additional_info: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Met à jour l'état d'une sous-tâche dans une tâche complexe.
-        
-        Args:
-            task_id (str): ID de la tâche complexe
-            subtask_index (int): Index de la sous-tâche
-            status (str): Statut de la sous-tâche
-            additional_info (dict, optional): Informations supplémentaires
-        
-        Returns:
-            dict: État mis à jour de la tâche
-        """
-        # Vérifier si la tâche existe
-        if task_id not in self._ongoing_tasks:
-            raise ValueError(f"Tâche {task_id} non trouvée")
-        
-        # Récupérer la tâche
-        task = self._ongoing_tasks[task_id]
-        
-        # Mettre à jour la sous-tâche
-        if 0 <= subtask_index < len(task['subtasks']):
-            task['subtasks'][subtask_index]['status'] = status
-            
-            # Mettre à jour le nombre de sous-tâches complétées
-            task['completed_subtasks'] = sum(
-                1 for st in task['subtasks'] if st.get('status') == 'completed'
-            )
-            
-            # Vérifier si toutes les sous-tâches sont terminées
-            if task['completed_subtasks'] == task['total_subtasks']:
-                task['status'] = 'completed'
-            
-            # Préparer le message de progression
-            progress_message = {
-                'task_id': task_id,
-                'current_step': task['completed_subtasks'],
-                'total_steps': task['total_subtasks'],
-                'status': task['status'],
-                'description': task['description'],
-                'additional_info': additional_info or {}
-            }
-            
-            # Ajouter à la file de progression
-            self.enqueue_clarification_request(
-                progress_message, 
-                queue_type='progress'
-            )
-            
-            return task
-        
-        raise ValueError(f"Sous-tâche {subtask_index} invalide pour la tâche {task_id}")
-    
-    def get_complex_task_status(
-        self, 
-        task_id: str
-    ) -> Dict[str, Any]:
-        """
-        Récupère le statut d'une tâche complexe.
-        
-        Args:
-            task_id (str): ID de la tâche complexe
-        
-        Returns:
-            dict: Statut détaillé de la tâche
-        """
-        task = self._ongoing_tasks.get(task_id)
-        
-        if not task:
-            return {
-                'status': 'not_found',
-                'message': f'Tâche {task_id} non trouvée'
-            }
-        
-        return {
-            'status': 'found',
-            'task_id': task_id,
-            'description': task['description'],
-            'total_subtasks': task['total_subtasks'],
-            'completed_subtasks': task['completed_subtasks'],
-            'progress_percentage': (task['completed_subtasks'] / task['total_subtasks']) * 100,
-            'task_status': task['status'],
-            'subtasks': task['subtasks']
-        }
-
 def get_user_proxy_agent(
     model: Optional[str] = None, 
     debug_mode: bool = False,
@@ -622,3 +533,29 @@ def get_user_proxy_agent(
     agent.start_processing()
     
     return agent
+
+if __name__ == '__main__':
+    import logging
+    
+    # Configuration du logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Créer un agent UserProxy pour le test
+    user_proxy = get_user_proxy_agent(
+        model="gpt-4o-mini",
+        debug_mode=True
+    )
+    
+    # Démarrer l'écoute de la queue de progression
+    try:
+        print("🔍 Démarrage de l'écoute de la queue de progression...")
+        user_proxy.start_progress_listener(
+            queue_name='queue_progress_task'
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt de l'écoute de la queue.")
+    except Exception as e:
+        print(f"❌ Erreur lors de l'écoute : {e}")
