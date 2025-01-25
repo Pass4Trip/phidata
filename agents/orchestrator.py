@@ -989,12 +989,22 @@ class OrchestratorAgent:
         # Convertir les résultats en format texte si nécessaire
         text_results = []
         for result in subtask_results:
+            # Gérer différents types de résultats
             if isinstance(result, RunResponse):
                 text_results.append(result.content)
             elif isinstance(result, dict):
-                text_results.append(result.get('content', str(result)))
+                # Extraire le contenu du résultat
+                content = result.get('result', {})
+                if isinstance(content, dict):
+                    text_results.append(content.get('content', str(content)))
+                else:
+                    text_results.append(str(content))
             else:
                 text_results.append(str(result))
+        
+        # Cas spécial : résultat unique
+        if len(text_results) == 1:
+            return text_results[0]
         
         # Utiliser l'agent orchestrateur pour synthétiser
         synthesis_prompt = f"""
@@ -1002,7 +1012,10 @@ class OrchestratorAgent:
         
         {chr(10).join(text_results)}
         
-        Fournis un résumé qui capture l'essence de tous ces résultats.
+        Règles pour la synthèse :
+        - Si plusieurs étapes, numérote et résume chaque étape
+        - Fournis un résumé final qui capture l'essence de tous les résultats
+        - Sois concis mais informatif
         """
         
         try:
@@ -1144,14 +1157,56 @@ async def process_user_request(
             user_request=user_request,
             debug_mode=debug_mode
         )
-        return result
+        
+        # Extraction de la synthèse
+        synthesized_result = result.get('synthesized_result', '')
+        
+        # Détermination de l'agent utilisé
+        agent_used = 'Multi-Purpose Intelligence Team'
+        task_results = result.get('task_results', {})
+        
+        # Cas avec plusieurs tâches : utiliser la synthèse
+        if len(task_results) > 1:
+            agent_used = list(task_results.values())[0].get('agent', agent_used)
+        
+        # Cas avec une seule tâche : extraire le contenu
+        elif len(task_results) == 1:
+            first_task = list(task_results.keys())[0]
+            task_result = task_results[first_task]
+            
+            # Si c'est un RunResponse
+            if hasattr(task_result, 'content'):
+                synthesized_result = task_result.content
+                agent_used = task_result.name if hasattr(task_result, 'name') else agent_used
+            
+            # Si c'est un dictionnaire
+            elif isinstance(task_result, dict):
+                # Essayer d'extraire le contenu de différentes manières
+                if 'result' in task_result:
+                    result_content = task_result['result']
+                    if isinstance(result_content, dict) and 'content' in result_content:
+                        synthesized_result = result_content['content']
+                    elif isinstance(result_content, str):
+                        synthesized_result = result_content
+                
+                agent_used = task_result.get('agent', agent_used)
+        
+        return {
+            'query': user_request,
+            'result': synthesized_result,
+            'agent_used': agent_used,
+            'metadata': {},
+            'error': None
+        }
     except Exception as e:
         logger.error(f"Erreur lors du traitement de la requête : {e}")
         logger.error(traceback.format_exc())
         return {
-            "error": f"Erreur lors du traitement de la requête : {e}",
-            "query": user_request,
-            "result": None
+            'query': user_request,
+            'result': '',
+            'agent_used': 'Multi-Purpose Intelligence Team',
+            'metadata': {},
+            'error': str(e)
         }
 
 def get_orchestrator_agent(
