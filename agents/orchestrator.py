@@ -811,69 +811,52 @@ class OrchestratorAgent:
         Returns:
             Dict[str, Any]: Résultats de l'exécution des tâches
         """
-        # Mode développement : simulation des résultats
-        if dev_mode:
-            task_results = {}
-            for task in task_ledger.current_plan:
-                task_results[task] = {
-                    'result': 'simulation_response_task_ok',
-                    'agent': 'dev_simulation'
-                }
-            
-            return {
-                'task_results': task_results,
-                'synthesized_result': 'Simulation complète des tâches en mode développement'
-            }
-        
-        # Mode normal d'exécution
-        task_results = {}
-        
         try:
-            logger.info("📋 Début de l'exécution des sous-tâches")
-            logger.info(f"🔢 Nombre total de sous-tâches : {len(task_ledger.current_plan)}")
+            # Initialiser le dictionnaire des résultats
+            task_results = {}
             
-            # Générer un ID unique pour la session d'exécution
-            execution_id = str(uuid.uuid4())
-            
-            # Parcourir chaque sous-tâche
+            # Exécuter chaque sous-tâche
             for task_index, task in enumerate(task_ledger.current_plan, 1):
                 try:
                     # Sélectionner l'agent le plus approprié
                     selected_agent = self._select_best_agent(task)
                     
-                    # Préparer le message de progression pour RabbitMQ
-                    progress_message = {
-                        'execution_id': execution_id,
-                        'task_id': task_ledger.task_id if hasattr(task_ledger, 'task_id') else None,
-                        'current_subtask': task,
-                        'subtask_index': task_index,
-                        'total_subtasks': len(task_ledger.current_plan),
-                        'status': 'subtask_started',
-                        'timestamp': datetime.now().isoformat()
-                    }
-                    
-                    # Publier le message dans la queue de progression
-                    self._publish_rabbitmq_message('queue_progress_task', progress_message)
-                    
-                    # Logs détaillés sur la sous-tâche
-                    logger.info(f"🚀 Exécution de la sous-tâche {task_index}/{len(task_ledger.current_plan)}")
-                    logger.info(f"📝 Tâche : {task}")
-                    logger.info(f"🔍 Agents disponibles : {list(self.agents.keys())}")
-                    logger.info(f"🤖 Agent sélectionné : {selected_agent.name}")
-                    
                     # Exécuter la sous-tâche de manière asynchrone
                     try:
-                        # Utiliser run() de manière asynchrone
+                        # Utiliser arun() de manière asynchrone
                         result = await selected_agent.arun(task)
-                    except TypeError:
-                        # Fallback sur l'exécution synchrone si arun n'est pas disponible
-                        result = selected_agent.run(task)
+                    except AttributeError:
+                        # Lever une exception si arun() n'est pas disponible
+                        raise RuntimeError(f"L'agent {selected_agent.name} ne supporte pas l'exécution asynchrone")
                     
                     # Stocker le résultat
                     task_results[task] = {
-                        'result': result,
-                        'agent': selected_agent.__class__.__name__
+                        "agent": selected_agent.name,
+                        "result": {
+                            "content": result.content,
+                            "content_type": result.content_type,
+                            "event": result.event,
+                            "messages": [
+                                {
+                                    "role": msg.role, 
+                                    "content": msg.content
+                                } for msg in result.messages
+                            ] if result.messages else []
+                        },
+                        "timestamp": datetime.now().isoformat()
                     }
+                    
+                    # Publier le message dans la queue de progression avec le résultat
+                    progress_message = {
+                        "task_index": task_index,
+                        "total_tasks": len(task_ledger.current_plan),
+                        "task": task,
+                        "agent": selected_agent.name,
+                        "status": "completed",
+                        "result": task_results[task]["result"],
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    self._publish_rabbitmq_message('queue_progress_task', progress_message)
                     
                     # Log de succès
                     logger.info(f"✅ Sous-tâche {task_index} terminée")
@@ -891,7 +874,7 @@ class OrchestratorAgent:
             
             # Synthétiser les résultats
             try:
-                synthesized_result = await self._synthesize_results(task_results)
+                synthesized_result = await self._synthesize_results(list(task_results.values()))
                 logger.info("🏁 Exécution de toutes les sous-tâches terminée")
                 logger.info(f"📋 Résultat synthétisé : {str(synthesized_result)[:200]}...")
             except Exception as synthesis_error:
@@ -940,35 +923,52 @@ class OrchestratorAgent:
                 # Exécuter les sous-tâches
                 task_results = await self.execute_task(task_ledger)
                 
-                # Synthétiser les résultats
-                synthesized_result = await self._synthesize_results(list(task_results.values()))
-                
-                return {
-                    'task_results': task_results,
-                    'synthesized_result': synthesized_result
-                }
-            else:
-                # Traitement direct sans décomposition
-                best_agent = self._select_best_agent(user_request)
-                
-                # Vérifier si l'agent a une méthode run asynchrone
-                if asyncio.iscoroutinefunction(best_agent.run):
-                    task_result = await best_agent.run(user_request)
-                else:
-                    # Exécution synchrone si nécessaire
-                    task_result = best_agent.run(user_request)
-                
-                return {
-                    'task_results': {'main_task': task_result},
-                    'synthesized_result': task_result.content if hasattr(task_result, 'content') else str(task_result)
-                }
+                return task_results
+            
+            # Si pas de décomposition, exécuter directement
+            selected_agent = self._select_best_agent(user_request)
+            result = await selected_agent.arun(user_request)
+            
+            # Préparer le message RabbitMQ
+            task_result_message = {
+                "task_index": 1,
+                "total_tasks": 1,
+                "task": user_request,
+                "agent": selected_agent.name,
+                "status": "completed",
+                "result": {
+                    "content": result.content,
+                    "content_type": result.content_type,
+                    "event": result.event,
+                    "messages": [
+                        {
+                            "role": msg.role, 
+                            "content": msg.content
+                        } for msg in result.messages
+                    ] if result.messages else []
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Publier le message dans la queue de progression
+            self._publish_rabbitmq_message('queue_progress_task', task_result_message)
+            
+            # Log détaillé
+            logger.info(f"📊 Résultat complet : {result}")
+            logger.info(f"📝 Contenu : {result.content}")
+            
+            return {
+                'task_results': {user_request: result},
+                'synthesized_result': result.content
+            }
         
         except Exception as e:
             logger.error(f"Erreur lors du traitement de la requête : {e}")
+            logger.error(traceback.format_exc())
+            
             return {
-                "error": f"Erreur lors du traitement de la requête : {e}",
-                "query": user_request,
-                "result": None
+                'task_results': {},
+                'synthesized_result': "Erreur lors du traitement de la requête."
             }
 
     async def _synthesize_results(
@@ -986,56 +986,55 @@ class OrchestratorAgent:
         """
         logger.info("🏁 Début de la synthèse des résultats")
         
-        try:
-            # Vérifier si les résultats sont des coroutines
-            processed_results = []
-            for result in subtask_results:
-                # Attendre si c'est une coroutine
-                if asyncio.iscoroutine(result):
-                    result = await result
-                
-                # Extraction robuste du contenu
-                if hasattr(result, 'content'):
-                    processed_results.append(result.content)
-                elif isinstance(result, dict) and 'result' in result:
-                    processed_results.append(str(result['result']))
-                elif isinstance(result, str):
-                    processed_results.append(result)
-                else:
-                    processed_results.append(str(result))
-            
-            # Synthétiser les résultats
-            synthesis_prompt = f"""
-            Synthétise les résultats suivants de manière claire et concise :
-            
-            Résultats : {processed_results}
-            
-            Assure-toi de :
-            - Présenter un résultat final cohérent
-            - Conserver l'ordre des sous-tâches
-            - Être précis et direct
-            """
-            
-            # Utiliser le client OpenAI pour la synthèse
-            synthesis_response = self.client.chat.completions.create(
-                model=self.llm_config['model'],
-                messages=[
-                    {"role": "system", "content": "Tu es un assistant qui synthétise des résultats de sous-tâches."},
-                    {"role": "user", "content": synthesis_prompt}
-                ],
-                temperature=0.2,
-                max_tokens=300
-            )
-            
-            # Extraire le contenu de la synthèse
-            synthesized_result = synthesis_response.choices[0].message.content.strip()
-            
-            logger.info(f"📋 Résultat synthétisé : {synthesized_result}")
-            return synthesized_result
+        # Convertir les résultats en format texte si nécessaire
+        text_results = []
+        for result in subtask_results:
+            if isinstance(result, RunResponse):
+                text_results.append(result.content)
+            elif isinstance(result, dict):
+                text_results.append(result.get('content', str(result)))
+            else:
+                text_results.append(str(result))
         
+        # Utiliser l'agent orchestrateur pour synthétiser
+        synthesis_prompt = f"""
+        Synthétise les résultats suivants de manière concise et claire :
+        
+        {chr(10).join(text_results)}
+        
+        Fournis un résumé qui capture l'essence de tous ces résultats.
+        """
+        
+        try:
+            # Essayer d'utiliser arun() en premier
+            synthesis_response = await self.agent.arun(synthesis_prompt)
+            synthesized_result = synthesis_response.content
+        except Exception:
+            # Fallback à la méthode synchrone
+            synthesis_response = self.agent(synthesis_prompt)
+            synthesized_result = synthesis_response.choices[0].message.content.strip()
+        
+        # Publier un message RabbitMQ avec la synthèse
+        try:
+            synthesis_message = {
+                "task_index": "synthesis",
+                "total_tasks": len(subtask_results),
+                "task": "Result Synthesis",
+                "agent": "OrchestratorAgent",
+                "status": "completed",
+                "result": {
+                    "content": synthesized_result,
+                    "content_type": "text/plain",
+                    "messages": []
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            self._publish_rabbitmq_message('queue_progress_task', synthesis_message)
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la synthèse des résultats : {e}")
-            return "Désolé, je n'ai pas pu synthétiser les résultats correctement."
+            logger.error(f"❌ Erreur lors de la publication de la synthèse : {e}")
+        
+        logger.info(f"📋 Résultat synthétisé : {synthesized_result}")
+        return synthesized_result
 
     def _generate_detailed_subtasks(self, user_request: str) -> List[Dict[str, Any]]:
         """
