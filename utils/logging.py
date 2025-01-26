@@ -12,7 +12,7 @@ def configure_logging(log_level: Optional[str] = None):
     """
     # Récupérer le niveau de log depuis une variable d'environnement si non spécifié
     if log_level is None:
-        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+        log_level = os.getenv('LOG_LEVEL', 'DEBUG').upper()
     
     # Mapper les niveaux de log
     log_levels = {
@@ -29,7 +29,10 @@ def configure_logging(log_level: Optional[str] = None):
     # Configuration du logging
     logging.basicConfig(
         level=selected_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),  # Ajouter un handler de console
+        ]
     )
     
     # Configurer les loggers spécifiques pour réduire le bruit de débogage
@@ -41,7 +44,7 @@ def configure_logging(log_level: Optional[str] = None):
     
     for logger_name in loggers_to_quiet:
         logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.WARNING if log_level == 'DEBUG' else logging.ERROR)
+        logger.setLevel(logging.WARNING)
     
     # Log le niveau de log configuré
     logger = logging.getLogger(__name__)

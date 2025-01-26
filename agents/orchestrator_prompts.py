@@ -36,18 +36,18 @@ Agents disponibles:
 Requête à décomposer: {user_request}
 
 Format de réponse REQUIS (JSON strict):
-{{
+{
     "task_name": "Nom descriptif de la tâche globale",
     "subtasks": [
-        {{
+        {
             "id": "identifiant_unique",
             "description": "Description précise de la sous-tâche",
             "suggested_agent": "Agent recommandé (Web/API/Data)",
             "priority": "haute/moyenne/basse"
-        }}
+        }
     ],
     "expected_outcome": "Résultat final attendu"
-}}
+}
 
 Conseils:
 - Soyez précis et actionnable
@@ -150,13 +150,12 @@ Format de réponse REQUIS:
 TASK_DECOMPOSITION_PROMPT = """
 Décompose la tâche suivante en sous-tâches plus petites et gérables.
 
-Tâche principale : {task}
+Tâche principale : {user_request}
 
 Instructions:
 1. Analyse la tâche en détail
 2. Identifie les sous-tâches nécessaires
 3. Attribue une priorité à chaque sous-tâche
-4. Suggère l'agent le plus approprié pour chaque sous-tâche
 
 Format de réponse :
 ```json
@@ -164,9 +163,8 @@ Format de réponse :
     "sub_tasks": [
         {
             "description": "Description de la sous-tâche",
-            "priority": "haute|moyenne|basse",
-            "agent": "Nom de l'agent suggéré",
-            "reasoning": "Justification du choix de l'agent"
+            "priority": "haute|moyenne|basse"
+
         }
     ]
 }

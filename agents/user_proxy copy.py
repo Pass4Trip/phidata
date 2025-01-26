@@ -757,75 +757,78 @@ class UserProxyAgent:
         except Exception as e:
             logger.error(f"Erreur lors de la publication du message : {e}")
 
+
+
     def route_request(
         self, 
         request: str, 
-        user_id: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Route une requête vers l'agent approprié.
-
+        Route une requête utilisateur vers l'agent le plus approprié.
+        
         Args:
-            request (str): Requête à traiter
-            user_id (str, optional): Identifiant de l'utilisateur
-            context (dict, optional): Contexte supplémentaire
-
+            request (str): Requête utilisateur à router
+            context (dict, optional): Contexte supplémentaire pour le routage
+        
         Returns:
-            Dict[str, Any]: Résultat du routage
+            dict: Résultat du routage avec l'agent cible et autres informations
         """
         try:
-            # Analyse de la requête pour déterminer l'agent
-            routing_analysis = self.run(
-                f"Analyse de la requête : '{request}'\n"
-                "Détermine quel agent devrait la traiter. "
-                "Fournis le nom de l'agent et une brève justification. "
-                "Critères de routage :\n"
-                "- Recherche web : requêtes nécessitant des informations actuelles\n"
-                "- Agents spécifiques : requêtes techniques ou spécialisées"
-            )
-
-            logger.info(f"Analyse de routage : {routing_analysis}")
-
-            # Importer dynamiquement les agents
-            from agents.web import get_web_searcher
-
-            # Logique de routage basée sur l'analyse
-            if any(keyword in routing_analysis.lower() for keyword in [
-                'recherche web', 
-                'actualités', 
-                'information', 
-                'rechercher', 
-                'trouver', 
-                'dernières nouvelles'
-            ]):
-                target_agent = get_web_searcher(
-                    user_id=user_id, 
-                    debug_mode=self.debug_mode
-                )
-            else:
-                # Agent par défaut si aucun routage spécifique n'est trouvé
-                target_agent = self  # Utiliser l'agent proxy lui-même comme agent par défaut
-
-            # Exécution de la requête sur l'agent cible
-            result = target_agent.run(
-                request, 
-                user_id=user_id, 
-                context=context
-            )
-
-            return {
-                "status": "success",
-                "agent": type(target_agent).__name__,
-                "result": result
+            # Liste des agents disponibles avec leurs descriptions
+            available_agents = {
+                "web_searcher": "Agent spécialisé dans la recherche web et l'agrégation d'informations",
+                "travel_planner": "Agent pour la planification et la recherche de voyages",
+                "api_knowledge": "Agent de recherche et d'analyse de connaissances spécialisées",
+                "data_analysis": "Agent pour l'analyse et le traitement de données",
+                "orchestrator": "Agent généraliste pour les tâches complexes ou non spécifiées"
             }
-
+            
+            # Préparation du prompt de routage
+            routing_prompt = f"""
+            Étant donné la requête utilisateur suivante : '{request}'
+            
+            Sélectionne l'agent le plus approprié parmi ces options :
+            {', '.join(available_agents.keys())}
+            
+            Règles de sélection :
+            1. Analyse précisément le besoin de l'utilisateur
+            2. Choisis l'agent avec la spécialisation la plus proche
+            3. En cas de doute, sélectionne 'orchestrator'
+            4. Retourne UNIQUEMENT le nom de l'agent, sans aucun texte supplémentaire
+            
+            Contexte supplémentaire disponible : {context or 'Aucun'}
+            
+            Agent cible :"""
+            
+            # Utilisation du LLM pour déterminer l'agent
+            target_agent = self.agent.run(routing_prompt).strip().lower()
+            
+            # Validation du résultat
+            if target_agent not in available_agents:
+                logger.warning(f"Agent non reconnu : {target_agent}. Utilisation de l'orchestrateur.")
+                target_agent = "orchestrator"
+            
+            # Préparation de la réponse de routage
+            routing_response = {
+                "status": "success",
+                "target_agent": target_agent,
+                "original_request": request,
+                "agent_description": available_agents.get(target_agent, "Agent générique"),
+                "context": context
+            }
+            
+            # Journalisation du routage
+            logger.info(f"Requête routée vers l'agent : {target_agent}")
+            
+            return routing_response
+        
         except Exception as e:
-            logger.error(f"Erreur de routage : {e}")
+            logger.error(f"Erreur lors du routage de la requête : {e}")
             return {
                 "status": "error",
                 "message": str(e),
-                "details": traceback.format_exc()
+                "original_request": request
             }
 
 def get_user_proxy_agent(
@@ -851,6 +854,6 @@ def get_user_proxy_agent(
     )
     
     # Démarrage automatique du traitement
-    #agent.start_processing_tasks()
+    agent.start_processing_tasks()
     
     return agent

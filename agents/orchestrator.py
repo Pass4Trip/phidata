@@ -2,11 +2,11 @@ import os
 import sys
 import asyncio
 import logging
+import traceback
 import json
 import uuid
-import traceback
-from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from phi.agent import RunResponse, Agent
 import openai
@@ -27,11 +27,11 @@ sys.path.insert(0, project_root)
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 # Ajout d'un handler de console si nécessaire
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
+console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 
@@ -332,7 +332,7 @@ class OrchestratorAgent:
 
     def _initialize_specialized_agents(
         self, 
-        enable_web_agent: bool = False,
+        enable_web_agent: bool = True,
         enable_api_knowledge_agent: bool = False,
         enable_data_analysis_agent: bool = False,
         enable_travel_planner: bool = False
@@ -365,7 +365,7 @@ class OrchestratorAgent:
                     debug_mode=False,
                     name="Web Search Agent"
                 )
-                logger.info("✅ Agent de recherche web initialisé")
+                logger.debug("✅ Agent de recherche web initialisé")
             except Exception as e:
                 logger.error(f"❌ Erreur d'initialisation de l'agent de recherche web : {e}")
         
@@ -378,7 +378,7 @@ class OrchestratorAgent:
                     user_id=None,
                     session_id=None
                 )
-                logger.info("✅ Agent de connaissances API initialisé")
+                logger.debug("✅ Agent de connaissances API initialisé")
             except ImportError:
                 logger.warning("❌ Agent de connaissances API non disponible")
         
@@ -391,7 +391,7 @@ class OrchestratorAgent:
                     user_id=None,
                     session_id=None
                 )
-                logger.info("✅ Agent d'analyse de données initialisé")
+                logger.debug("✅ Agent d'analyse de données initialisé")
             except ImportError:
                 logger.warning("❌ Agent d'analyse de données non disponible")
         
@@ -404,7 +404,7 @@ class OrchestratorAgent:
                     user_id=None,
                     session_id=None
                 )
-                logger.info("✅ Agent de planification de voyage initialisé")
+                logger.debug("✅ Agent de planification de voyage initialisé")
             except ImportError:
                 logger.warning("❌ Agent de planification de voyage non disponible")
         
@@ -417,10 +417,10 @@ class OrchestratorAgent:
             ],
             name="Math Agent"
         )
-        logger.info("✅ Agent mathématique par défaut initialisé")
+        logger.debug("✅ Agent mathématique par défaut initialisé")
         
         # Log des agents disponibles
-        logger.info(f"🤖 Agents initialisés : {list(agents.keys())}")
+        logger.debug(f"🤖 Agents initialisés : {list(agents.keys())}")
         
         return agents
 
@@ -644,11 +644,16 @@ class OrchestratorAgent:
                     {
                         "role": "user", 
                         "content": f"""
-                        Étant donné la tâche suivante, détermine quel agent serait le plus approprié :
-                        
+                        Analyse la tâche suivante et choisis l'agent le plus adapté en fonction de ses compétences :
+
                         Tâche : {task}
                         
-                        Agents disponibles : {list(self.agents.keys())}
+                        Liste des agents disponibles : {list(self.agents.keys())}
+
+                        Critères de sélection :
+                        - Compatibilité des compétences de l'agent avec la tâche.
+                        - Spécialisation et capacité d'exécution de l'agent.
+                        - Rapidité et efficacité de l'agent pour accomplir la tâche.
                         
                         Réponds uniquement avec le nom de l'agent le plus adapté.
                         """
@@ -660,7 +665,7 @@ class OrchestratorAgent:
             
             # Extraire et traiter la classification
             classification = response.choices[0].message.content.strip().lower()
-            logger.info(f"🧠 Classification de la tâche : {classification}")
+            logger.debug(f"🧠 Classification de la tâche : {classification}")
             logger.info(f"🔍 Agents disponibles : {list(self.agents.keys())}")
 
             # Convertir le nom en agent
@@ -737,7 +742,7 @@ class OrchestratorAgent:
                     )
                 )
                 
-                logger.info(f"Message publié dans la file {queue_name} sur {rabbitmq_host}:{rabbitmq_port}")
+                logger.info(f"Message RabbitMQ publié dans la file {queue_name} sur {rabbitmq_host}:{rabbitmq_port}")
                 return True
             
             except Exception as publish_error:
@@ -881,8 +886,41 @@ class OrchestratorAgent:
                 # Générer un ID unique pour cette sous-tâche
                 sub_task_id = str(uuid.uuid4())
                 
-                # Exécuter la sous-tâche
-                result = await selected_agent.arun(task)
+                # Exécuter la sous-tâche avec vérification des méthodes disponibles de l'agent
+                logger.info(f"🔍 Exécution de la tâche : {task}")
+                
+                # Récupérer le nom de l'agent de plusieurs manières
+                agent_name = (
+                    getattr(selected_agent, 'name', None) or  # Attribut 'name' défini lors de la création
+                    getattr(selected_agent, '__name__', None) or  # Nom de la classe
+                    selected_agent.__class__.__name__  # Nom de la classe par défaut
+                )
+                logger.info(f"🤖 Réslisation de la sous tache par : {agent_name}")
+
+                try:
+                    if hasattr(selected_agent, 'run'):
+                        logger.debug("📡 Utilisation de la méthode synchrone run()")
+                        result = selected_agent.run(task)
+                        logger.debug(f"✅ Méthode run() exécutée avec succès pour {selected_agent.__class__.__name__}")
+                    
+                    elif hasattr(selected_agent, 'arun'):
+                        logger.debug("📡 Utilisation de la méthode asynchrone arun()")
+                        result = await selected_agent.arun(task)
+                        logger.debug(f"✅ Méthode arun() exécutée avec succès pour {selected_agent.__class__.__name__}")
+                    
+                    else:
+                        logger.warning("⚠️ Aucune méthode run() ou arun() trouvée, utilisation du modèle LLM direct")
+                        result = selected_agent.model(task)
+                        logger.debug(f"✅ Modèle LLM utilisé pour {selected_agent.__class__.__name__}")
+
+                    # Log du résultat
+                    #logger.info(f"📊 Résultat de l'agent : {result}")
+
+                except Exception as e:
+                    logger.error(f"❌ Erreur lors de l'exécution de l'agent {selected_agent.__class__.__name__}")
+                    logger.error(f"🔴 Détails de l'erreur : {str(e)}")
+                    logger.error(f"🔍 Trace complète : {traceback.format_exc()}")
+                    result = None
                 
                 # Préparer le message de résultat de sous-tâche
                 subtask_result_message = self._create_task_message(
@@ -1039,16 +1077,15 @@ class OrchestratorAgent:
         """
         try:
             # Préparer le prompt pour la génération de sous-tâches
-            subtasks_prompt = f"""
-            Décompose la requête suivante en sous-tâches précises et réalisables :
+            subtasks_prompt = """
+            Décompose la tâche suivante en sous-tâches plus petites et gérables.
             
-            Requête : {user_request}
+            Tâche principale : {user_request}
             
-            Instructions :
-            - Divise la tâche en étapes concrètes et mesurables
-            - Chaque sous-tâche doit être claire et réalisable
-            - Inclure des détails sur l'objectif de chaque sous-tâche
-            - Estimer un temps approximatif pour chaque sous-tâche
+            Instructions:
+            1. Analyse la tâche en détail
+            2. Identifie les sous-tâches nécessaires
+            3. Attribue une priorité à chaque sous-tâche
             
             Format de réponse REQUIS (JSON strict) :
             {{
@@ -1056,13 +1093,11 @@ class OrchestratorAgent:
                     {{
                         "task_id": "identifiant_unique",
                         "description": "Description détaillée de la sous-tâche",
-                        "estimated_time": "Temps estimé",
-                        "priority": "haute/moyenne/basse",
-                        "required_skills": ["compétences requises"]
+                        "priority": "haute|moyenne|basse"                    
                     }}
                 ]
             }}
-            """
+            """.format(user_request=user_request)
             
             # Générer les sous-tâches directement avec le client OpenAI
             response = self.client.chat.completions.create(
