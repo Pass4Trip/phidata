@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from phi.agent import RunResponse, Agent
 import openai
+import time  # Ajout de l'import pour time
 
 from agents.web import get_web_searcher
 from agents.settings import agent_settings
@@ -827,6 +828,8 @@ class OrchestratorAgent:
         Returns:
             TaskLedger: Le registre de tâches mis à jour
         """
+        logger.info(f"🧩 Décomposition de la tâche principale : {user_request}")
+        
         try:
             # Décomposer la tâche
             detailed_subtasks = self._generate_detailed_subtasks(user_request)
@@ -840,6 +843,11 @@ class OrchestratorAgent:
                 subtask['description']
                 for subtask in detailed_subtasks
             ]
+            
+            # Log détaillé des sous-tâches identifiées
+            logger.info(f"📋 Nombre de sous-tâches identifiées : {len(self.task_ledger.current_plan)}")
+            for idx, subtask in enumerate(self.task_ledger.current_plan, 1):
+                logger.info(f"🔢 Sous-tâche {idx}: {subtask}")
             
             # Préparer le message de tâche principal
             task_message = self._create_task_message(
@@ -856,8 +864,11 @@ class OrchestratorAgent:
             return self.task_ledger
         
         except Exception as e:
-            logger.error(f"Erreur lors de la décomposition de tâche : {e}")
-            # Retourner le TaskLedger même en cas d'erreur
+            logger.error(f"❌ Erreur lors de la décomposition de tâche : {e}")
+            logger.error(f"🔍 Trace complète : {traceback.format_exc()}")
+            
+            # En cas d'erreur, retourner le TaskLedger avec la tâche originale
+            self.task_ledger.current_plan = [user_request]
             return self.task_ledger
 
     async def execute_task(
@@ -880,6 +891,8 @@ class OrchestratorAgent:
         try:
             # Parcourir les sous-tâches du registre
             for task_index, task in enumerate(task_ledger.current_plan, 1):
+                logger.info(f"🔢 Sous-tâche {task_index}/{len(task_ledger.current_plan)}: {task}")
+                
                 # Sélectionner dynamiquement l'agent
                 selected_agent = self._select_best_agent(task)
                 
@@ -895,9 +908,11 @@ class OrchestratorAgent:
                     getattr(selected_agent, '__name__', None) or  # Nom de la classe
                     selected_agent.__class__.__name__  # Nom de la classe par défaut
                 )
-                logger.info(f"🤖 Réslisation de la sous tache par : {agent_name}")
+                logger.info(f"🤖 Réalisation de la sous-tâche par : {agent_name}")
 
                 try:
+                    start_time = time.time()
+                    
                     if hasattr(selected_agent, 'run'):
                         logger.debug("📡 Utilisation de la méthode synchrone run()")
                         result = selected_agent.run(task)
@@ -913,8 +928,13 @@ class OrchestratorAgent:
                         result = selected_agent.model(task)
                         logger.debug(f"✅ Modèle LLM utilisé pour {selected_agent.__class__.__name__}")
 
-                    # Log du résultat
-                    #logger.info(f"📊 Résultat de l'agent : {result}")
+                    end_time = time.time()
+                    execution_time = end_time - start_time
+                    
+                    # Log détaillé du résultat de la sous-tâche
+                    logger.info(f"✨ Résultat de la sous-tâche : {result.content[:200]}...")
+                    logger.info(f"⏱️ Temps d'exécution : {execution_time:.2f} secondes")
+                    
 
                 except Exception as e:
                     logger.error(f"❌ Erreur lors de l'exécution de l'agent {selected_agent.__class__.__name__}")
@@ -930,8 +950,8 @@ class OrchestratorAgent:
                     original_request=task,
                     status='completed',
                     result={
-                        "content": result.content,
-                        "content_type": result.content_type,
+                        "content": result.content if result else "Aucun résultat",
+                        "content_type": result.content_type if result else "error",
                         "agent": selected_agent.name
                     }
                 )
@@ -941,10 +961,10 @@ class OrchestratorAgent:
                 
                 # Stocker le résultat
                 subtask_results.append({
-                    'result': result.content,
+                    'result': result.content if result else "Aucun résultat",
                     'agent': selected_agent.name
                 })
-        
+    
             return subtask_results
     
         except Exception as e:
@@ -1078,21 +1098,22 @@ class OrchestratorAgent:
         try:
             # Préparer le prompt pour la génération de sous-tâches
             subtasks_prompt = """
-            Décompose la tâche suivante en sous-tâches plus petites et gérables.
+            Décompose la tâche suivante en sous-tâches essentielles et non redondantes.
             
             Tâche principale : {user_request}
             
             Instructions:
             1. Analyse la tâche en détail
-            2. Identifie les sous-tâches nécessaires
-            3. Attribue une priorité à chaque sous-tâche
+            2. Identifie les actions concrètes nécessaires
+            3. Évite les étapes redondantes de rapport de résultat
+            4. Concentre-toi sur les actions productives
             
             Format de réponse REQUIS (JSON strict) :
             {{
                 "subtasks": [
                     {{
                         "task_id": "identifiant_unique",
-                        "description": "Description détaillée de la sous-tâche",
+                        "description": "Description concise et précise de la sous-tâche",
                         "priority": "haute|moyenne|basse"                    
                     }}
                 ]
@@ -1103,7 +1124,7 @@ class OrchestratorAgent:
             response = self.client.chat.completions.create(
                 model=self.llm_config.get('model', 'gpt-4o-mini'),
                 messages=[
-                    {"role": "system", "content": "Tu es un expert en décomposition de tâches complexes."},
+                    {"role": "system", "content": "Tu es un expert en décomposition de tâches complexes, privilégiant la concision et l'efficacité."},
                     {"role": "user", "content": subtasks_prompt}
                 ],
                 response_format={"type": "json_object"},
@@ -1140,10 +1161,8 @@ class OrchestratorAgent:
             return [
                 {
                     "task_id": "task_1",
-                    "description": f"Analyser la requête : {user_request}",
-                    "estimated_time": "1 heure",
-                    "priority": "haute",
-                    "required_skills": ["compréhension", "analyse"]
+                    "description": f"Analyser et exécuter : {user_request}",
+                    "priority": "haute"
                 }
             ]
 
