@@ -3,14 +3,20 @@ import sys
 import asyncio
 import logging
 import traceback
-import json
 import uuid
+import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable
 from dataclasses import dataclass, field
-from phi.agent import RunResponse, Agent
+import time
+
 import openai
-import time  # Ajout de l'import pour time
+from phi.agent import RunResponse, Agent, AgentMemory
+from phi.model.openai import OpenAIChat
+from phi.memory.db.postgres import PgMemoryDb
+from phi.storage.agent.postgres import PgAgentStorage
+from phi.storage.agent.sqlite import SqlAgentStorage
+from phi.memory.db.sqlite import SqliteMemoryDb
 
 from agents.web import get_web_searcher
 from agents.settings import agent_settings
@@ -22,11 +28,13 @@ from agents.orchestrator_prompts import (
 
 from utils.colored_logging import get_colored_logger
 
-# Ajouter le répertoire parent au PYTHONPATH
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
 
-# Configuration du logger
+
+agent_memory_file: str = "orchestrator_agent_memory.db"
+agent_storage_file: str = "orchestrator_agent_sessions.db"
+
+
+# Configuration du logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -35,6 +43,11 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# Ajouter le répertoire parent au PYTHONPATH
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
 
 # Ajouter le handler au logger s'il n'est pas déjà présent
 if not logger.handlers:
@@ -264,7 +277,7 @@ class ProgressLedger:
             "status": self.status
         }
 
-class OrchestratorAgent:
+class OrchestratorAgent(Agent):
     """
     Agent orchestrateur avancé avec décomposition de tâches
     """
@@ -277,10 +290,18 @@ class OrchestratorAgent:
         enable_web_agent: bool = True,
         enable_api_knowledge_agent: bool = False,
         enable_data_analysis_agent: bool = False,
-        enable_travel_planner: bool = False
+        enable_travel_planner: bool = False,
+        # Ajout des paramètres de la classe Agent
+        name: str = "Orchestrator Agent",
+        instructions: Optional[List[str]] = None,
+        tools: Optional[List[Callable]] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        storage: Optional[Dict[str, Any]] = None,
+        **kwargs
     ):
         """
-        Initialiser l'agent orchestrateur avec des agents spécialisés
+        Initialiser l'agent orchestrateur avec des agents spécialisés et une mémoire persistante
         
         Args:
             model_id (str): Identifiant du modèle OpenAI
@@ -291,7 +312,61 @@ class OrchestratorAgent:
             enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
             enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
             enable_travel_planner (bool): Activer l'agent de planification de voyage
+            db_url (str): URL de connexion à la base de données PostgreSQL
+            memory_table_name (str): Nom de la table de mémoire
+            storage_table_name (str): Nom de la table de stockage
         """
+        # Préparer les instructions par défaut si non fournies
+        default_instructions = [
+            "Tu es un agent d'orchestration intelligent.",
+            "Décompose les tâches complexes en sous-tâches gérables.",
+            "Sélectionne et coordonne les agents spécialisés.",
+            "Assure une exécution efficace et cohérente des tâches."
+        ]
+        instructions = kwargs.get('instructions', default_instructions)
+        # Configuration du stockage
+        storage = SqlAgentStorage(
+            table_name="agent_sessions", 
+            db_file=agent_storage_file
+        )
+
+        # Préparation des paramètres pour l'initialisation
+        agent_init_kwargs = {
+            "name": "Orchestrator Agent",
+            "instructions": instructions,
+            "tools": tools,
+            "user_id": user_id,
+            "session_id": session_id,
+            "memory": AgentMemory(
+                # db=PgMemoryDb(
+                #     table_name=kwargs.get('memory_table_name', 'orchestrator_agent_memory'), 
+                #     db_url=kwargs.get('db_url', 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun')
+                # ),
+                #AgentMemory(
+                    db=SqliteMemoryDb(
+                        table_name="agent_memory",
+                        db_file=agent_memory_file,
+                    ),
+            # Create and store personalized memories for this user
+            create_user_memories=True,
+            # Update memories for the user after each run
+            update_user_memories_after_run=True,
+            # Create and store session summaries
+            create_session_summary=True,
+            # Update session summaries after each run
+            update_session_summary_after_run=True,
+            ),
+            "storage": storage,
+            "add_history_to_messages": True,
+            "num_history_responses": 3
+        }
+        
+        # Ajouter les kwargs supplémentaires
+        agent_init_kwargs.update(kwargs)
+
+        # Appel du constructeur parent de Agent
+        super().__init__(**agent_init_kwargs)
+        
         # Configuration du modèle LLM
         self.llm_config = {
             "model": model_id,
@@ -331,15 +406,34 @@ class OrchestratorAgent:
         # Créer l'agent orchestrateur avec configuration simplifiée
         self.agent = self._create_orchestrator_agent(debug_mode)
 
+    def run(self, task: str) -> RunResponse:
+        """
+        Méthode run standard pour l'Agent Phidata
+        Délègue au processus de traitement de requête existant
+        """
+        try:
+            result = self.process_request(task, debug_mode=self.debug_mode)
+            return RunResponse(
+                content=result.get('final_result', 'Aucun résultat'),
+                content_type='text',
+                metadata=result
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'exécution de l'orchestrateur : {e}")
+            return RunResponse(
+                content=f"Erreur : {str(e)}",
+                content_type='error'
+            )
+
     def _initialize_specialized_agents(
         self, 
         enable_web_agent: bool = True,
         enable_api_knowledge_agent: bool = False,
         enable_data_analysis_agent: bool = False,
         enable_travel_planner: bool = False
-    ) -> Dict[str, Agent]:
+    ) -> Dict[str, Any]:
         """
-        Initialiser tous les agents spécialisés de manière dynamique
+        Initialiser les agents spécialisés
         
         Args:
             enable_web_agent (bool): Activer l'agent de recherche web
@@ -348,7 +442,7 @@ class OrchestratorAgent:
             enable_travel_planner (bool): Activer l'agent de planification de voyage
         
         Returns:
-            Dict[str, Agent]: Dictionnaire des agents disponibles
+            Dict[str, Any]: Dictionnaire des agents initialisés
         """
         logger.info("🤖 Initialisation des agents spécialisés")
         logger.info(f"🌐 Web Agent: {enable_web_agent}")
@@ -358,70 +452,25 @@ class OrchestratorAgent:
         
         agents = {}
         
-        # Agent de recherche web
+        # Initialisation de l'agent de recherche web
         if enable_web_agent:
             try:
-                agents["web_search"] = get_web_searcher(
-                    model_id=agent_settings.gpt_4,
-                    debug_mode=False,
-                    name="Web Search Agent"
-                )
-                logger.debug("✅ Agent de recherche web initialisé")
+                web_agent = get_web_searcher()
+                agents['web_agent'] = web_agent
+                logger.info("✅ Agent de recherche web initialisé avec succès")
             except Exception as e:
                 logger.error(f"❌ Erreur d'initialisation de l'agent de recherche web : {e}")
+                logger.debug(traceback.format_exc())
         
-        # Agent de connaissances API (à implémenter)
+        # Placeholder pour les autres agents (à implémenter si nécessaire)
         if enable_api_knowledge_agent:
-            try:
-                from agents.api_knowledge import get_api_knowledge_agent
-                agents["api_knowledge"] = get_api_knowledge_agent(
-                    debug_mode=False,
-                    user_id=None,
-                    session_id=None
-                )
-                logger.debug("✅ Agent de connaissances API initialisé")
-            except ImportError:
-                logger.warning("❌ Agent de connaissances API non disponible")
+            logger.warning("🚧 API Knowledge Agent non implémenté")
         
-        # Agent d'analyse de données (à implémenter)
         if enable_data_analysis_agent:
-            try:
-                from agents.data_analysis import get_data_analysis_agent
-                agents["data_analysis"] = get_data_analysis_agent(
-                    debug_mode=False,
-                    user_id=None,
-                    session_id=None
-                )
-                logger.debug("✅ Agent d'analyse de données initialisé")
-            except ImportError:
-                logger.warning("❌ Agent d'analyse de données non disponible")
+            logger.warning("🚧 Data Analysis Agent non implémenté")
         
-        # Agent de planification de voyage (à implémenter)
         if enable_travel_planner:
-            try:
-                from agents.travel import get_travel_planner_agent
-                agents["travel_planner"] = get_travel_planner_agent(
-                    debug_mode=False,
-                    user_id=None,
-                    session_id=None
-                )
-                logger.debug("✅ Agent de planification de voyage initialisé")
-            except ImportError:
-                logger.warning("❌ Agent de planification de voyage non disponible")
-        
-        # Ajout d'un agent mathématique par défaut
-        agents["math_agent"] = Agent(
-            instructions=[
-                "Tu es un agent spécialisé dans les calculs mathématiques.",
-                "Réponds uniquement aux questions mathématiques simples.",
-                "Assure-toi de donner une réponse précise et concise."
-            ],
-            name="Math Agent"
-        )
-        logger.debug("✅ Agent mathématique par défaut initialisé")
-        
-        # Log des agents disponibles
-        logger.debug(f"🤖 Agents initialisés : {list(agents.keys())}")
+            logger.warning("🚧 Travel Planner Agent non implémenté")
         
         return agents
 
@@ -1168,7 +1217,13 @@ class OrchestratorAgent:
 
 async def process_user_request(
     user_request: str, 
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    # Ajout des paramètres de mémoire et stockage
+    db_url: str = 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun',
+    memory_table_name: str = "agent_memory",
+    storage_table_name: str = "agent_sessions",
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Traiter une requête utilisateur de manière asynchrone avec l'orchestrateur
@@ -1176,6 +1231,11 @@ async def process_user_request(
     Args:
         user_request (str): La requête de l'utilisateur
         debug_mode (bool): Mode de débogage
+        db_url (str): URL de connexion à la base de données PostgreSQL
+        memory_table_name (str): Nom de la table de mémoire
+        storage_table_name (str): Nom de la table de stockage
+        user_id (Optional[str]): Identifiant utilisateur
+        session_id (Optional[str]): Identifiant de session
     
     Returns:
         Dict[str, Any]: Résultat du traitement de la requête
@@ -1183,7 +1243,13 @@ async def process_user_request(
     try:
         orchestrator = OrchestratorAgent(
             debug_mode=debug_mode, 
-            original_request=user_request
+            original_request=user_request,
+            # Ajout des paramètres de mémoire et stockage
+            db_url=db_url,
+            memory_table_name=memory_table_name,
+            storage_table_name=storage_table_name,
+            user_id=user_id,
+            session_id=session_id
         )
         result = await orchestrator.process_request(
             user_request=user_request,
@@ -1197,11 +1263,11 @@ async def process_user_request(
         agent_used = 'Multi-Purpose Intelligence Team'
         task_results = result.get('task_results', {})
         
-        # Cas avec plusieurs tâches : utiliser la synthèse
+        # Cas spécial : résultat unique
         if len(task_results) > 1:
             agent_used = list(task_results.values())[0].get('agent', agent_used)
         
-        # Cas avec une seule tâche : extraire le contenu
+        # Cas où aucun résultat n'est disponible
         elif len(task_results) == 1:
             first_task = list(task_results.keys())[0]
             task_result = task_results[first_task]
@@ -1246,7 +1312,17 @@ def get_orchestrator_agent(
     enable_web_agent: bool = True,
     enable_api_knowledge_agent: bool = False,
     enable_data_analysis_agent: bool = False,
-    enable_travel_planner: bool = False
+    enable_travel_planner: bool = False,
+    db_url: str = 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun',
+    memory_table_name: str = "agent_memory",
+    storage_table_name: str = "agent_sessions",
+    # Paramètres optionnels de l'agent
+    name: str = "Orchestrator Agent",
+    instructions: Optional[List[str]] = None,
+    tools: Optional[List[Callable]] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    **kwargs
 ) -> OrchestratorAgent:
     """
     Créer un agent orchestrateur avec configuration personnalisable
@@ -1257,6 +1333,9 @@ def get_orchestrator_agent(
         enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
         enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
         enable_travel_planner (bool): Activer l'agent de planification de voyage
+        db_url (str): URL de connexion à la base de données PostgreSQL
+        memory_table_name (str): Nom de la table de mémoire
+        storage_table_name (str): Nom de la table de stockage
     
     Returns:
         OrchestratorAgent: Agent orchestrateur configuré
@@ -1266,7 +1345,18 @@ def get_orchestrator_agent(
         enable_web_agent=enable_web_agent,
         enable_api_knowledge_agent=enable_api_knowledge_agent,
         enable_data_analysis_agent=enable_data_analysis_agent,
-        enable_travel_planner=enable_travel_planner
+        enable_travel_planner=enable_travel_planner,
+        # Paramètres de mémoire et stockage
+        db_url=db_url,
+        memory_table_name=memory_table_name,
+        storage_table_name=storage_table_name,
+        # Paramètres optionnels de l'agent
+        name=name,
+        instructions=instructions,
+        tools=tools,
+        user_id=user_id,
+        session_id=session_id,
+        **kwargs
     )
 
 # Exemple d'utilisation
