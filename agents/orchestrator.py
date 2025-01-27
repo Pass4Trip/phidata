@@ -342,7 +342,6 @@ class OrchestratorAgent(Agent):
                 #     table_name=kwargs.get('memory_table_name', 'orchestrator_agent_memory'), 
                 #     db_url=kwargs.get('db_url', 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun')
                 # ),
-                #AgentMemory(
                     db=SqliteMemoryDb(
                         table_name="agent_memory",
                         db_file=agent_memory_file,
@@ -365,7 +364,16 @@ class OrchestratorAgent(Agent):
         agent_init_kwargs.update(kwargs)
 
         # Appel du constructeur parent de Agent
-        super().__init__(**agent_init_kwargs)
+        super().__init__(
+            name="Orchestrator Agent",
+            instructions=instructions,
+            tools=tools,
+            user_id=user_id,
+            session_id=session_id,
+            memory=memory,
+            storage=storage,
+            **kwargs
+        )
         
         # Configuration du modèle LLM
         self.llm_config = {

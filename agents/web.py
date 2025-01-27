@@ -2,11 +2,14 @@ from typing import Optional, Any, Dict, Callable
 import os
 import logging
 from dotenv import load_dotenv
-from phi.agent import Agent
+from phi.agent import Agent, AgentMemory
 from phi.storage.agent.postgres import PgAgentStorage
 import json
 from datetime import datetime, timedelta
 from phi.model.openai import OpenAIChat
+from phi.storage.agent.sqlite import SqlAgentStorage
+from phi.memory.db.sqlite import SqliteMemoryDb
+
 
 # Importer les nouveaux outils de recherche
 from llm_axe.models import llm_axe_OpenAIChat
@@ -24,6 +27,8 @@ handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+agent_storage_file: str = "orchestrator_agent_sessions.db"
 
 def get_web_searcher(
     model_id: str = "gpt-4o-mini",
@@ -112,7 +117,21 @@ def get_web_searcher(
         user_id=user_id,
         session_id=session_id,
         name="Web Search Agent",
-        stream=False
+        memory=AgentMemory(
+            db=SqliteMemoryDb(
+                table_name="agent_memory",
+                db_file=agent_storage_file,
+            ),
+            # Create and store personalized memories for this user
+            create_user_memories=True,
+            # Update memories for the user after each run
+            update_user_memories_after_run=True,
+            # Create and store session summaries
+            create_session_summary=True,
+            # Update session summaries after each run
+            update_session_summary_after_run=True,
+        ),        
+        storage=SqlAgentStorage(table_name="agent_sessions", db_file=agent_storage_file),
     )
 
     logger.debug("✅ Agent de recherche web initialisé avec succès")
