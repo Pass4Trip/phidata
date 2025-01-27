@@ -15,7 +15,7 @@ Ce projet implémente une architecture multi-agent flexible utilisant le framewo
   - Sélection dynamique de l'agent le plus adapté
   - Possibilité d'étendre les capacités avec de nouveaux agents
 
-### 2. Web Search Agent (`web.py`)
+### 2. Web Search Agent (`web__router.py`)
 - **Rôle**: Recherche d'informations sur le web
 - **Outils**: 
   - DuckDuckGo Search

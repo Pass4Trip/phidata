@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import logging
 from dotenv import load_dotenv
 from utils.logging import configure_logging
-from api.routes.web import web_router
+from api.routes.web__router import web_router
 
 # Charger les variables d'environnement
 load_dotenv()

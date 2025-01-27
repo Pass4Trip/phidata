@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Importer les routes des différents agents
-from .web import web_router    
+from .web_router import web_router    
 from .orchestrator_router import orchestrator_router
 from .user_proxy_router import user_proxy_router
     

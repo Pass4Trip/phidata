@@ -1,6 +1,9 @@
 from typing import Optional, Dict, Any, List, Callable, Union
-from phi.agent import Agent
+from phi.agent import Agent, AgentMemory
 from phi.llm.openai import OpenAIChat
+from phi.storage.agent.postgres import PgAgentStorage
+from phi.memory.db.postgres import PgMemoryDb
+
 import logging
 import queue
 import threading
@@ -16,9 +19,33 @@ from pika.adapters.blocking_connection import BlockingChannel
 from dotenv import load_dotenv
 import traceback
 import sys
+import time
 
 # Charger les variables d'environnement
 load_dotenv()
+
+# Construction dynamique de l'URL de base de données PostgreSQL
+def build_postgres_url():
+    """
+    Construire dynamiquement l'URL de connexion PostgreSQL à partir des variables d'environnement
+    
+    Returns:
+        str: URL de connexion PostgreSQL
+    """
+    db_host = os.getenv('DB_HOST', 'vps-af24e24d.vps.ovh.net')
+    db_port = os.getenv('DB_PORT', '30030')
+    db_name = os.getenv('DB_NAME', 'myboun')
+    db_user = os.getenv('DB_USER', 'p4t')
+    db_password = os.getenv('DB_PASSWORD', '')
+    db_schema = os.getenv('DB_SCHEMA', 'ai')
+    
+    # Construire l'URL de connexion PostgreSQL avec le schéma
+    db_url = f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?options=-c%20search_path%3D{db_schema}'
+    
+    return db_url
+
+# Générer l'URL de base de données
+db_url = build_postgres_url()
 
 # Ajouter le chemin du projet
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,14 +53,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Configuration du logging
 logger = logging.getLogger(__name__)
 
-def default_chatbot_message_sender(message):
-    """
-    Sender de messages par défaut qui log les messages
-    
-    Args:
-        message (dict): Message à envoyer
-    """
-    logger.info(f"MESSAGE PROACTIF PAR DÉFAUT : {message}")
 
 class UserProxyAgent:
     def __init__(
@@ -157,21 +176,7 @@ class UserProxyAgent:
             logger.error(f"Erreur de connexion RabbitMQ : {e}")
             raise
 
-    # Conserver pour compatibilité, mais marquer comme deprecated
-    def _get_rabbitmq_connection(self):
-        """
-        DEPRECATED: Utilisez _connect_to_rabbitmq(create_channel=False) à la place.
-        
-        Établit une connexion à RabbitMQ.
-        
-        Returns:
-            pika.BlockingConnection: Connexion RabbitMQ
-        """
-        logger.warning(
-            "La méthode _get_rabbitmq_connection() est obsolète. "
-            "Utilisez _connect_to_rabbitmq(create_channel=False)"
-        )
-        return self._connect_to_rabbitmq(create_channel=False)
+
 
     def process_rabbitmq_queue(
         self, 
@@ -757,81 +762,141 @@ class UserProxyAgent:
         except Exception as e:
             logger.error(f"Erreur lors de la publication du message : {e}")
 
-    def route_request(
+    def run(self, query: str, **kwargs) -> str:
+        """
+        Méthode générique d'exécution pour compatibilité avec le pattern d'agent.
+        
+        Args:
+            query (str): Requête à traiter
+            **kwargs: Arguments supplémentaires
+        
+        Returns:
+            str: Résultat de l'exécution
+        """
+        try:
+            # Utiliser l'agent interne pour traiter la requête
+            result = self.agent.run(query, **kwargs)
+            
+            # Convertir le résultat en chaîne si nécessaire
+            return str(result)
+        
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'exécution : {e}")
+            return f"Erreur : {str(e)}"
+
+    async def route_request(
         self, 
-        request: str, 
-        user_id: Optional[str] = None,
+        query: str, 
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Route une requête vers l'agent approprié.
-
+        Route une requête utilisateur vers l'agent approprié.
+        
         Args:
-            request (str): Requête à traiter
-            user_id (str, optional): Identifiant de l'utilisateur
-            context (dict, optional): Contexte supplémentaire
-
+            query (str): Requête de l'utilisateur
+            context (Optional[Dict[str, Any]]): Contexte supplémentaire
+        
         Returns:
             Dict[str, Any]: Résultat du routage
         """
         try:
-            # Analyse de la requête pour déterminer l'agent
+            # Utiliser l'agent pour analyser et router la requête
             routing_analysis = self.run(
-                f"Analyse de la requête : '{request}'\n"
-                "Détermine quel agent devrait la traiter. "
-                "Fournis le nom de l'agent et une brève justification. "
-                "Critères de routage :\n"
-                "- Recherche web : requêtes nécessitant des informations actuelles\n"
-                "- Agents spécifiques : requêtes techniques ou spécialisées"
+                f"Analyse et route cette requête : {query}\n"
+                "Détermine quel agent spécialisé est le plus approprié.\n"
+                "Réponds uniquement par le nom de l'agent ou un mot-clé."
             )
-
-            logger.info(f"Analyse de routage : {routing_analysis}")
-
-            # Importer dynamiquement les agents
-            from agents.web import get_web_searcher
-
-            # Logique de routage basée sur l'analyse
-            if any(keyword in routing_analysis.lower() for keyword in [
-                'recherche web', 
-                'actualités', 
-                'information', 
-                'rechercher', 
-                'trouver', 
-                'dernières nouvelles'
-            ]):
-                target_agent = get_web_searcher(
-                    user_id=user_id, 
-                    debug_mode=self.debug_mode
-                )
-            else:
-                # Agent par défaut si aucun routage spécifique n'est trouvé
-                target_agent = self  # Utiliser l'agent proxy lui-même comme agent par défaut
-
-            # Exécution de la requête sur l'agent cible
-            result = target_agent.run(
-                request, 
-                user_id=user_id, 
-                context=context
-            )
-
+            
+            # Nettoyer et extraire le nom de l'agent
+            routing_analysis = routing_analysis.strip().lower()
+            
+            # Exemple de logique de routage (à personnaliser)
+            target_agent = self._select_agent(routing_analysis)
+            
             return {
                 "status": "success",
-                "agent": type(target_agent).__name__,
-                "result": result
+                "target_agent": target_agent,
+                "response": {
+                    "routing_details": routing_analysis
+                }
             }
-
+        
         except Exception as e:
-            logger.error(f"Erreur de routage : {e}")
+            self.logger.error(f"Erreur lors du routage : {e}")
             return {
                 "status": "error",
-                "message": str(e),
-                "details": traceback.format_exc()
+                "error": str(e)
+            }
+
+    def _select_agent(self, routing_analysis: str) -> str:
+        """
+        Sélectionne l'agent le plus approprié en fonction de l'analyse.
+        
+        Args:
+            routing_analysis (str): Analyse de routage générée par l'agent
+        
+        Returns:
+            str: Nom de l'agent cible
+        """
+        # Liste des mots-clés pour chaque type d'agent
+        agent_keywords = {
+            "WebSearchAgent": ["web", "recherche", "information", "actualité"],
+            "TravelPlannerAgent": ["voyage", "travel", "destination"],
+            "DataAnalysisAgent": ["données", "data", "analyse", "statistique"],
+            "OrchestratorAgent": ["default", "général", "autre"]
+        }
+        
+        # Recherche du meilleur agent
+        for agent, keywords in agent_keywords.items():
+            if any(keyword in routing_analysis for keyword in keywords):
+                return agent
+        
+        # Agent par défaut si aucun mot-clé n'est trouvé
+        return "OrchestratorAgent"
+
+    async def handle_clarification_request(
+        self, 
+        query: str, 
+        clarification_needed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Gère une demande de clarification pour une requête.
+        
+        Args:
+            query (str): Requête nécessitant une clarification
+            clarification_needed (Optional[str]): Message de clarification
+        
+        Returns:
+            Dict[str, Any]: Résultat de la demande de clarification
+        """
+        try:
+            # Générer une demande de clarification
+            clarification_response = self.agent.run(
+                f"La requête suivante nécessite une clarification : {query}\n"
+                f"Détails de clarification : {clarification_needed or 'Informations supplémentaires requises'}"
+            )
+            
+            return {
+                "status": "clarification_needed",
+                "clarification_message": clarification_response
+            }
+        
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la demande de clarification : {e}")
+            return {
+                "status": "error",
+                "error": str(e)
             }
 
 def get_user_proxy_agent(
-    model: Optional[str] = None, 
+    model_id: str = "gpt-4o-mini",
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
     debug_mode: bool = False,
-    rabbitmq_config: Optional[Dict[str, str]] = None
+    stream: bool = False,
+    rabbitmq_config: Optional[Dict[str, str]] = None,
+    **kwargs
+
 ) -> UserProxyAgent:
     """
     Fonction factory pour créer l'agent UserProxy.
@@ -845,10 +910,27 @@ def get_user_proxy_agent(
         UserProxyAgent: Instance de l'agent UserProxy
     """
     agent = UserProxyAgent(
-        model=model, 
         debug_mode=debug_mode, 
-        rabbitmq_config=rabbitmq_config
+        rabbitmq_config=rabbitmq_config,
+        user_id=user_id,
+        session_id=session_id,
+        name="Web Search Agent",
+        memory=AgentMemory(
+            db=PgMemoryDb(table_name="agent_memories", db_url=db_url),
+            # Create and store personalized memories for this user
+            create_user_memories=True,
+            # Update memories for the user after each run
+            update_user_memories_after_run=True,
+            # Create and store session summaries
+            create_session_summary=True,
+            # Update session summaries after each run
+            update_session_summary_after_run=True,
+        ),        
+        storage=PgAgentStorage(table_name="agent_sessions", db_url=db_url),
     )
+
+    logger.debug(" User Proxy initialisé avec succès")
+    
     
     # Démarrage automatique du traitement
     #agent.start_processing_tasks()

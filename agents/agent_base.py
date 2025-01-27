@@ -2,17 +2,40 @@ from typing import Optional, Any, Dict, Callable
 import os
 import logging
 from dotenv import load_dotenv
-from phi.agent import Agent, AgentMemory
-from phi.storage.agent.postgres import PgAgentStorage
 import json
 from datetime import datetime, timedelta
+
+from phi.agent import Agent, AgentMemory
 from phi.model.openai import OpenAIChat
-from phi.storage.agent.sqlite import SqlAgentStorage
-from phi.memory.db.sqlite import SqliteMemoryDb
+from phi.storage.agent.postgres import PgAgentStorage
+from phi.memory.db.postgres import PgMemoryDb
 
 
 # Charger les variables d'environnement
 load_dotenv()
+
+# Construction dynamique de l'URL de base de données PostgreSQL
+def build_postgres_url():
+    """
+    Construire dynamiquement l'URL de connexion PostgreSQL à partir des variables d'environnement
+    
+    Returns:
+        str: URL de connexion PostgreSQL
+    """
+    db_host = os.getenv('DB_HOST', 'vps-af24e24d.vps.ovh.net')
+    db_port = os.getenv('DB_PORT', '30030')
+    db_name = os.getenv('DB_NAME', 'myboun')
+    db_user = os.getenv('DB_USER', 'p4t')
+    db_password = os.getenv('DB_PASSWORD', '')
+    db_schema = os.getenv('DB_SCHEMA', 'ai')
+    
+    # Construire l'URL de connexion PostgreSQL avec le schéma
+    db_url = f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?options=-c%20search_path%3D{db_schema}'
+    
+    return db_url
+
+# Générer l'URL de base de données
+db_url = build_postgres_url()
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
@@ -70,10 +93,7 @@ def get_agent_base(
         session_id=session_id,
         name="Agent Base",
         memory=AgentMemory(
-            db=SqliteMemoryDb(
-                table_name="agent_memory",
-                db_file=agent_storage_file,
-            ),
+            db=PgMemoryDb(table_name="agent_memories", db_url=db_url),
             # Create and store personalized memories for this user
             create_user_memories=True,
             # Update memories for the user after each run
@@ -83,57 +103,8 @@ def get_agent_base(
             # Update session summaries after each run
             update_session_summary_after_run=True,
         ),        
-        storage=SqlAgentStorage(table_name="agent_sessions", db_file=agent_storage_file),
+        storage=PgAgentStorage(table_name="agent_sessions", db_url=db_url),
     )
 
     logger.debug("✅ Agent de recherche web initialisé avec succès")
     return agent_base
-
-# Exemple d'exécution directe de l'agent
-if __name__ == "__main__":
-    import sys
-    
-    # Configuration du logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    
-    # Créer l'agent
-    agent = get_agent_base(
-        debug_mode=True,
-        user_id="paddy",
-        session_id="tpaddy_session",
-        model_id="gpt-4o-mini",
-        stream=False
-    )
-    
-    # Exemple de tâche à exécuter
-    def run_agent_test():
-        try:
-            # Exemples de requêtes de test
-            test_queries = [
-                "Quelle est ma derniere question ?"
-            ]
-            
-            for query in test_queries:
-                print(f"\n{'='*50}")
-                print(f"🔍 Requête : {query}")
-                print(f"{'='*50}")
-                
-                # Exécuter l'agent avec la requête
-                result = agent.run(query)
-                
-                print("\n📋 Réponse :")
-                print(result)
-        
-        except Exception as e:
-            logger.error(f"❌ Erreur lors de l'exécution de l'agent : {e}")
-            import traceback
-            traceback.print_exc()
-    
-    # Lancer le test
-    run_agent_test()

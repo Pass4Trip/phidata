@@ -11,14 +11,14 @@ from dataclasses import dataclass, field
 import time
 
 import openai
-from phi.agent import RunResponse, Agent, AgentMemory
+from phi.agent import RunResponse, Agent
 from phi.model.openai import OpenAIChat
-from phi.memory.db.postgres import PgMemoryDb
-from phi.storage.agent.postgres import PgAgentStorage
-from phi.storage.agent.sqlite import SqlAgentStorage
-from phi.memory.db.sqlite import SqliteMemoryDb
 
 from agents.web import get_web_searcher
+from agents.agent_base import get_agent_base
+
+
+
 from agents.settings import agent_settings
 from agents.orchestrator_prompts import (
     get_task_decomposition_prompt,
@@ -53,30 +53,6 @@ sys.path.insert(0, project_root)
 if not logger.handlers:
     logger.addHandler(console_handler)
 
-AGENT_ROUTING_PROMPT = """
-Pour la tâche : '{task}'
-Et les agents suivants :
-{agents_description}
-
-Historique des performances :
-{performance_history}
-
-Quel agent est le plus approprié pour cette tâche ?
-Fournir le nom de l'agent, le score de confiance et le raisonnement.
-Format : JSON avec les clés 'selected_agent', 'confidence_score' et 'reasoning'
-"""
-
-TASK_CONTEXT_PROMPT = """
-Pour la tâche : '{task}'
-Et le contexte suivant :
-{context}
-
-Analyser le contexte et fournir les éléments suivants :
-- Une analyse du contexte
-- Une approche recommandée
-- Des considérations critiques
-Format : JSON avec les clés 'context_analysis', 'recommended_approach' et 'critical_considerations'
-"""
 
 @dataclass
 class TaskLedger:
@@ -277,136 +253,111 @@ class ProgressLedger:
             "status": self.status
         }
 
-class OrchestratorAgent(Agent):
+class OrchestratorAgent:
     """
     Agent orchestrateur avancé avec décomposition de tâches
     """
     def __init__(
-        self,
+        self, 
         model_id: str = "gpt-4o-mini", 
         debug_mode: bool = False,
         original_request: Optional[str] = None,
         api_key: Optional[str] = None,  
         enable_web_agent: bool = True,
         enable_api_knowledge_agent: bool = False,
-        enable_data_analysis_agent: bool = False,
-        enable_travel_planner: bool = False,
-        # Ajout des paramètres de la classe Agent
+        enable_agent_base: bool = True,
+        # Paramètres de configuration
         name: str = "Orchestrator Agent",
         instructions: Optional[List[str]] = None,
-        tools: Optional[List[Callable]] = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        storage: Optional[Dict[str, Any]] = None,
+        model: Optional[OpenAIChat] = None,
         **kwargs
     ):
         """
-        Initialiser l'agent orchestrateur avec des agents spécialisés et une mémoire persistante
+        Initialiser l'agent orchestrateur avec des agents spécialisés
         
         Args:
-            model_id (str): Identifiant du modèle OpenAI
-            debug_mode (bool): Mode de débogage
-            original_request (Optional[str]): Requête originale pour le TaskLedger
-            api_key (Optional[str]): Clé API OpenAI personnalisée
-            enable_web_agent (bool): Activer l'agent de recherche web
-            enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
-            enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
-            enable_travel_planner (bool): Activer l'agent de planification de voyage
-            db_url (str): URL de connexion à la base de données PostgreSQL
-            memory_table_name (str): Nom de la table de mémoire
-            storage_table_name (str): Nom de la table de stockage
+            user_id (Optional[str]): Identifiant unique de l'utilisateur
+            session_id (Optional[str]): Identifiant de session pour le suivi
         """
-        # Préparer les instructions par défaut si non fournies
+        # Préparer les instructions par défaut
         default_instructions = [
-            "Tu es un agent d'orchestration intelligent.",
-            "Décompose les tâches complexes en sous-tâches gérables.",
-            "Sélectionne et coordonne les agents spécialisés.",
-            "Assure une exécution efficace et cohérente des tâches."
+            "🤖 Agent d'Orchestration Intelligent pour la Résolution Adaptative des Requêtes",
+            "Objectif Principal : Traiter Efficacement Chaque Requête avec une Approche Multi-Stratégique",
+            "",
+            "🔍 Stratégies de Traitement :",
+            "1. Analyse Contextuelle Approfondie :",
+            "   - Évaluer la requête initiale",
+            "   - Consulter la mémoire utilisateur pour enrichissement",
+            "   - Déterminer le mode de traitement optimal",
+            "",
+            "2. Modes de Résolution :",
+            "   a) Traitement Direct :",
+            "      - Résoudre immédiatement si la requête est simple",
+            "      - Utiliser les connaissances existantes",
+            "   b) Enrichissement Contextuel :",
+            "      - Consulter et intégrer les informations de la mémoire utilisateur",
+            "      - Affiner et compléter la requête initiale",
+            "   c) Décomposition Stratégique :",
+            "      - Fragmenter les tâches complexes en sous-tâches précises",
+            "      - Attribuer chaque sous-tâche à l'agent spécialisé",
+            "",
+            "3. Routage Intelligent :",
+            "   - Sélectionner dynamiquement l'agent le plus adapté :",
+            "     * Analyse sémantique de la requête",
+            "     * Correspondance avec les compétences des agents disponibles",
+            "     * Évaluation de la complexité et du contexte",
+            "     * Capacité à créer ou adapter des agents dynamiquement",
+            "",
+            "🧠 Principes Opérationnels :",
+            "- Être le point d'entrée unique et adaptatif pour toutes les requêtes",
+            "- Maximiser la précision et la pertinence de la réponse",
+            "- Maintenir une traçabilité complète du processus de résolution",
+            "- S'adapter dynamiquement aux différents types et complexités de demandes"
         ]
-        instructions = kwargs.get('instructions', default_instructions)
-        # Configuration du stockage
-        storage = SqlAgentStorage(
-            table_name="agent_sessions", 
-            db_file=agent_storage_file
-        )
+        instructions = instructions or default_instructions
 
-        # Préparation des paramètres pour l'initialisation
-        agent_init_kwargs = {
-            "name": "Orchestrator Agent",
-            "instructions": instructions,
-            "tools": tools,
-            "user_id": user_id,
-            "session_id": session_id,
-            "memory": AgentMemory(
-                # db=PgMemoryDb(
-                #     table_name=kwargs.get('memory_table_name', 'orchestrator_agent_memory'), 
-                #     db_url=kwargs.get('db_url', 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun')
-                # ),
-                    db=SqliteMemoryDb(
-                        table_name="agent_memory",
-                        db_file=agent_memory_file,
-                    ),
-            # Create and store personalized memories for this user
-            create_user_memories=True,
-            # Update memories for the user after each run
-            update_user_memories_after_run=True,
-            # Create and store session summaries
-            create_session_summary=True,
-            # Update session summaries after each run
-            update_session_summary_after_run=True,
-            ),
-            "storage": storage,
-            "add_history_to_messages": True,
-            "num_history_responses": 3
-        }
-        
-        # Ajouter les kwargs supplémentaires
-        agent_init_kwargs.update(kwargs)
+        # Initialisation des identifiants
+        self.user_id = user_id or str(uuid.uuid4())
+        self.session_id = session_id or str(uuid.uuid4())
 
-        # Appel du constructeur parent de Agent
-        super().__init__(
-            name="Orchestrator Agent",
-            instructions=instructions,
-            tools=tools,
-            user_id=user_id,
-            session_id=session_id,
-            memory=memory,
-            storage=storage,
-            **kwargs
-        )
-        
-        # Configuration du modèle LLM
-        self.llm_config = {
-            "model": model_id,
-            "temperature": 0.2
-        }
-        
-        # Utiliser la clé API fournie ou celle de l'environnement
+        # Initialisation du client OpenAI
         openai_api_key = api_key or os.getenv('OPENAI_API_KEY')
         
-        # Initialisation explicite du client OpenAI
-        try:
-            self.client = openai.OpenAI(api_key=openai_api_key)
-        except Exception as e:
-            logger.error(f"❌ Erreur d'initialisation du client OpenAI : {e}")
-            self.client = None
+        # Créer une méthode de fallback pour les appels OpenAI
+        def create_openai_client():
+            try:
+                return openai.OpenAI(api_key=openai_api_key)
+            except Exception as e:
+                logger.error(f"❌ Erreur d'initialisation du client OpenAI : {e}")
+                return None
         
-        # Initialiser le modèle OpenAI
-        self.model = self.client.chat.completions.create
+        # Stocker le client OpenAI comme attribut privé
+        self._openai_client = create_openai_client()
         
-        # Initialiser self.llm comme alias de self.model
-        self.llm = self.model
+        # Méthode de fallback pour les appels de complétion
+        def fallback_chat_completions_create(*args, **kwargs):
+            if self._openai_client:
+                return self._openai_client.chat.completions.create(*args, **kwargs)
+            else:
+                raise ValueError("Client OpenAI non initialisé")
         
-        # Initialisation centralisée des agents
+        # Stocker la méthode de création de complétion
+        self._llm_create = fallback_chat_completions_create
+
+        # Initialisation du modèle
+        self.model_id = model_id
+        self.model = model or OpenAIChat(model=model_id, temperature=0.2)
+        self.debug_mode = debug_mode
+        
+        # Initialisation des agents spécialisés
         self.agents = self._initialize_specialized_agents(
             enable_web_agent=enable_web_agent,
             enable_api_knowledge_agent=enable_api_knowledge_agent,
-            enable_data_analysis_agent=enable_data_analysis_agent,
-            enable_travel_planner=enable_travel_planner
+            enable_agent_base=enable_agent_base,
+
         )
-        
-        # Initialisation du mode de débogage
-        self.debug_mode = debug_mode
         
         # Création du TaskLedger initial
         self.task_ledger = self._create_task_ledger(original_request)
@@ -437,8 +388,7 @@ class OrchestratorAgent(Agent):
         self, 
         enable_web_agent: bool = True,
         enable_api_knowledge_agent: bool = False,
-        enable_data_analysis_agent: bool = False,
-        enable_travel_planner: bool = False
+        enable_agent_base: bool = True,
     ) -> Dict[str, Any]:
         """
         Initialiser les agents spécialisés
@@ -455,8 +405,8 @@ class OrchestratorAgent(Agent):
         logger.info("🤖 Initialisation des agents spécialisés")
         logger.info(f"🌐 Web Agent: {enable_web_agent}")
         logger.info(f"📚 API Knowledge Agent: {enable_api_knowledge_agent}")
-        logger.info(f"📊 Data Analysis Agent: {enable_data_analysis_agent}")
-        logger.info(f"✈️ Travel Planner Agent: {enable_travel_planner}")
+        logger.info(f"📊 Base Agent : {enable_agent_base}")
+        
         
         agents = {}
         
@@ -464,7 +414,13 @@ class OrchestratorAgent(Agent):
         if enable_web_agent:
             try:
                 web_agent = get_web_searcher()
-                agents['web_agent'] = web_agent
+                agents_with_descriptions = {
+                    'web_agent': {
+                        'agent': web_agent,
+                        'description': "Agent spécialisé dans la recherche et la collecte d'informations sur le web. Idéal pour les requêtes nécessitant des données actualisées ou des recherches en ligne."
+                    },
+                }
+                agents.update(agents_with_descriptions)
                 logger.info("✅ Agent de recherche web initialisé avec succès")
             except Exception as e:
                 logger.error(f"❌ Erreur d'initialisation de l'agent de recherche web : {e}")
@@ -474,11 +430,20 @@ class OrchestratorAgent(Agent):
         if enable_api_knowledge_agent:
             logger.warning("🚧 API Knowledge Agent non implémenté")
         
-        if enable_data_analysis_agent:
-            logger.warning("🚧 Data Analysis Agent non implémenté")
-        
-        if enable_travel_planner:
-            logger.warning("🚧 Travel Planner Agent non implémenté")
+        if enable_agent_base:
+            try:
+                agent_base = get_agent_base()
+                agents_with_descriptions = {
+                    'agent_base': {
+                        'agent': agent_base,
+                        'description': "Agent conversationnel polyvalent capable de répondre à une large variété de questions. Adapté aux tâches générales nécessitant compréhension et analyse."
+                    }
+                }
+                agents.update(agents_with_descriptions)
+                logger.info("✅ Agent de base initialisé avec succès")
+            except Exception as e:
+                logger.error(f"❌ Erreur d'initialisation de l'agent de base : {e}")
+                logger.debug(traceback.format_exc())
         
         return agents
 
@@ -509,16 +474,40 @@ class OrchestratorAgent(Agent):
         """
         return Agent(
             # Utiliser la méthode create du client OpenAI
-            llm=self.client.chat.completions.create,
+            llm=self._openai_client.chat.completions.create,
             instructions=[
-                "Tu es un agent d'orchestration avancé capable de décomposer des tâches complexes.",
-                "Étapes de travail :",
-                "1. Analyser la requête originale",
-                "2. Décomposer la requête en sous-tâches précises et réalisables",
-                "3. Attribuer chaque sous-tâche à l'agent le plus approprié",
-                "4. Suivre la progression de chaque sous-tâche",
-                "5. Intégrer et synthétiser les résultats partiels",
-                "6. Adapter dynamiquement le plan si nécessaire"
+                "🤖 Agent d'Orchestration Intelligent pour la Résolution Adaptative des Requêtes",
+                "Objectif Principal : Traiter Efficacement Chaque Requête avec une Approche Multi-Stratégique",
+                "",
+                "🔍 Stratégies de Traitement :",
+                "1. Analyse Contextuelle Approfondie :",
+                "   - Évaluer la requête initiale",
+                "   - Consulter la mémoire utilisateur pour enrichissement",
+                "   - Déterminer le mode de traitement optimal",
+                "",
+                "2. Modes de Résolution :",
+                "   a) Traitement Direct :",
+                "      - Résoudre immédiatement si la requête est simple",
+                "      - Utiliser les connaissances existantes",
+                "   b) Enrichissement Contextuel :",
+                "      - Consulter et intégrer les informations de la mémoire utilisateur",
+                "      - Affiner et compléter la requête initiale",
+                "   c) Décomposition Stratégique :",
+                "      - Fragmenter les tâches complexes en sous-tâches précises",
+                "      - Attribuer chaque sous-tâche à l'agent spécialisé",
+                "",
+                "3. Routage Intelligent :",
+                "   - Sélectionner dynamiquement l'agent le plus adapté :",
+                "     * Analyse sémantique de la requête",
+                "     * Correspondance avec les compétences des agents disponibles",
+                "     * Évaluation de la complexité et du contexte",
+                "     * Capacité à créer ou adapter des agents dynamiquement",
+                "",
+                "🧠 Principes Opérationnels :",
+                "- Être le point d'entrée unique et adaptatif pour toutes les requêtes",
+                "- Maximiser la précision et la pertinence de la réponse",
+                "- Maintenir une traçabilité complète du processus de résolution",
+                "- S'adapter dynamiquement aux différents types et complexités de demandes"
             ],
             # Ajouter le mode de débogage si nécessaire
             debug_mode=debug_mode
@@ -554,7 +543,7 @@ class OrchestratorAgent(Agent):
                                         "enum": [
                                             "Web Search Agent", 
                                             "API Knowledge Agent", 
-                                            "Travel Planner Agent"
+                                            "Agent Base"
                                         ]
                                     },
                                     "priority": {
@@ -634,9 +623,12 @@ class OrchestratorAgent(Agent):
         Returns:
             bool: True si décomposition nécessaire, False sinon
         """
+        logger.info(f"🔍 Analyse de décomposition pour la requête : '{user_request}'")
+        
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_config["model"],
+            # Utiliser l'API OpenAI pour déterminer la nécessité de décomposition
+            response = self._openai_client.chat.completions.create(
+                model=self.model_id,
                 messages=[
                     {
                         "role": "system", 
@@ -691,10 +683,13 @@ class OrchestratorAgent(Agent):
         """
         # Sélection par LLM
         try:
-            # Utiliser l'API OpenAI pour classifier la tâche
-            response = self.client.chat.completions.create(
-                model=self.llm_config['model'],
-                messages=[
+            # Préparer les descriptions des agents pour l'analyse
+            agents_descriptions = "\n".join([
+                f"- {name}: {agent_info.get('description', 'Pas de description disponible')}"
+                for name, agent_info in self.agents.items()
+            ])
+            
+            messages=[
                     {
                         "role": "system", 
                         "content": "Tu es un assistant qui aide à sélectionner le bon agent parmi une liste."
@@ -702,36 +697,45 @@ class OrchestratorAgent(Agent):
                     {
                         "role": "user", 
                         "content": f"""
-                        Analyse la tâche suivante et choisis l'agent le plus adapté en fonction de ses compétences :
-
-                        Tâche : {task}
+                        Je dois sélectionner le meilleur agent pour la tâche suivante : "{task}"
                         
-                        Liste des agents disponibles : {list(self.agents.keys())}
-
+                        Voici les agents disponibles :
+                        {agents_descriptions}
+                        
                         Critères de sélection :
-                        - Compatibilité des compétences de l'agent avec la tâche.
-                        - Spécialisation et capacité d'exécution de l'agent.
-                        - Rapidité et efficacité de l'agent pour accomplir la tâche.
+                        - Analyse la description de chaque agent
+                        - Évalue sa pertinence par rapport à la tâche
+                        - Prends en compte la spécialisation de l'agent
                         
                         Réponds uniquement avec le nom de l'agent le plus adapté.
                         """
                     }
-                ],
+                ]
+            response = self._openai_client.chat.completions.create(
+                model=self.model_id,
+                messages=messages,
                 temperature=0.2,
                 max_tokens=300
             )
             
             # Extraire et traiter la classification
             classification = response.choices[0].message.content.strip().lower()
-            logger.debug(f"🧠 Classification de la tâche : {classification}")
+            logger.info(f"🧠 Classification de la tâche : {classification}")
+            logger.debug(f"🧠 messages : {messages}")
             logger.info(f"🔍 Agents disponibles : {list(self.agents.keys())}")
 
             # Convertir le nom en agent
-            selected_agent_name = classification.lower().replace(' ', '_')
-            selected_agent = self.agents.get(selected_agent_name)
+            selected_agent_name = classification.replace(' ', '_').lower()
             
-            logger.info(f"🏆 Agent sélectionné : {selected_agent_name}")
-            return selected_agent
+            # Vérifier si l'agent existe
+            if selected_agent_name in self.agents:
+                selected_agent = self.agents[selected_agent_name]['agent']
+                logger.info(f"🎯 Agent sélectionné : {selected_agent_name}")
+                return selected_agent
+            
+            # Fallback : utiliser l'agent de base si aucun agent n'est trouvé
+            logger.warning(f"⚠️ Aucun agent trouvé pour '{selected_agent_name}'. Utilisation de l'agent de base.")
+            return self.agents['agent_base']['agent']
         
         except Exception as e:
             logger.error(f"❌ Erreur de sélection d'agent : {e}")
@@ -885,10 +889,18 @@ class OrchestratorAgent(Agent):
         Returns:
             TaskLedger: Le registre de tâches mis à jour
         """
-        logger.info(f"🧩 Décomposition de la tâche principale : {user_request}")
-        
         try:
+            # Vérification préliminaire de décomposition
+            needs_decomposition = self.should_decompose_task(user_request)
+
+            # Si pas besoin de décomposition, traitement simple
+            if not needs_decomposition:
+                # Ajouter directement la tâche au registre
+                self.task_ledger.add_task(user_request)
+                return self.task_ledger, needs_decomposition
+
             # Décomposer la tâche
+            logger.info(f"🧩 Décomposition de la tâche principale : {user_request}")
             detailed_subtasks = self._generate_detailed_subtasks(user_request)
             
             # Ajouter des sub_task_id aux sous-tâches
@@ -918,7 +930,7 @@ class OrchestratorAgent(Agent):
             # Publier le message dans la queue de progression
             self._publish_rabbitmq_message('queue_progress_task', task_message)
             
-            return self.task_ledger
+            return self.task_ledger, needs_decomposition
         
         except Exception as e:
             logger.error(f"❌ Erreur lors de la décomposition de tâche : {e}")
@@ -931,6 +943,7 @@ class OrchestratorAgent(Agent):
     async def execute_task(
         self, 
         task_ledger: TaskLedger, 
+        needs_decomposition: bool,
         dev_mode: bool = False
     ) -> List[Dict[str, Any]]:
         """
@@ -946,6 +959,52 @@ class OrchestratorAgent(Agent):
         subtask_results = []
         
         try:
+            # Cas sans décomposition : traitement direct
+            if not needs_decomposition:
+                logger.info("🚀 Exécution directe de la tâche sans décomposition")
+                
+                # Sélectionner le meilleur agent
+                selected_agent = self._select_best_agent(task_ledger.original_request)
+                logger.info(f"🤖 Agent sélectionné : {selected_agent.name}")
+                
+                try:
+                    # Exécution directe de la tâche
+                    start_time = time.time()
+                    
+                    if hasattr(selected_agent, 'run'):
+                        logger.debug("📡 Utilisation de la méthode synchrone run()")
+                        result = selected_agent.run(task_ledger.original_request)
+                    
+                    elif hasattr(selected_agent, 'arun'):
+                        logger.debug("📡 Utilisation de la méthode asynchrone arun()")
+                        result = await selected_agent.arun(task_ledger.original_request)
+                    
+                    else:
+                        logger.warning("⚠️ Aucune méthode run() ou arun() trouvée, utilisation du modèle LLM direct")
+                        result = selected_agent.model(task_ledger.original_request)
+                    
+                    end_time = time.time()
+                    execution_time = end_time - start_time
+                    
+                    logger.info(f"✨ Résultat de la tâche : {result.content[:200]}...")
+                    logger.info(f"⏱️ Temps d'exécution : {execution_time:.2f} secondes")
+                    
+                    # Formater le résultat comme une liste de dictionnaires pour être cohérent
+                    return [{
+                        'task': task_ledger.original_request,
+                        'result': result.content,
+                        'agent': selected_agent.name,
+                        'execution_time': execution_time
+                    }]
+                
+                except Exception as e:
+                    logger.error(f"❌ Erreur lors de l'exécution directe : {e}")
+                    logger.debug(f"🔍 Trace complète : {traceback.format_exc()}")
+                    return []
+
+            # Cas avec décomposition (code existant)
+            subtask_results = []
+            
             # Parcourir les sous-tâches du registre
             for task_index, task in enumerate(task_ledger.current_plan, 1):
                 logger.info(f"🔢 Sous-tâche {task_index}/{len(task_ledger.current_plan)}: {task}")
@@ -1045,10 +1104,10 @@ class OrchestratorAgent(Agent):
         """
         try:
             # Décomposer la tâche
-            task_ledger = await self.decompose_task(user_request)
+            task_ledger, needs_decomposition = await self.decompose_task(user_request)
             
             # Exécuter les sous-tâches
-            subtask_results = await self.execute_task(task_ledger)
+            subtask_results = await self.execute_task(task_ledger, needs_decomposition)
             
             # Synthétiser les résultats
             synthesized_result = await self._synthesize_results(subtask_results)
@@ -1178,8 +1237,8 @@ class OrchestratorAgent(Agent):
             """.format(user_request=user_request)
             
             # Générer les sous-tâches directement avec le client OpenAI
-            response = self.client.chat.completions.create(
-                model=self.llm_config.get('model', 'gpt-4o-mini'),
+            response = self._openai_client.chat.completions.create(
+                model=self.model_id,
                 messages=[
                     {"role": "system", "content": "Tu es un expert en décomposition de tâches complexes, privilégiant la concision et l'efficacité."},
                     {"role": "user", "content": subtasks_prompt}
@@ -1231,7 +1290,8 @@ async def process_user_request(
     memory_table_name: str = "agent_memory",
     storage_table_name: str = "agent_sessions",
     user_id: Optional[str] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
     Traiter une requête utilisateur de manière asynchrone avec l'orchestrateur
@@ -1242,8 +1302,8 @@ async def process_user_request(
         db_url (str): URL de connexion à la base de données PostgreSQL
         memory_table_name (str): Nom de la table de mémoire
         storage_table_name (str): Nom de la table de stockage
-        user_id (Optional[str]): Identifiant utilisateur
-        session_id (Optional[str]): Identifiant de session
+        user_id (Optional[str]): Identifiant unique de l'utilisateur
+        session_id (Optional[str]): Identifiant de session pour le suivi
     
     Returns:
         Dict[str, Any]: Résultat du traitement de la requête
@@ -1257,7 +1317,8 @@ async def process_user_request(
             memory_table_name=memory_table_name,
             storage_table_name=storage_table_name,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id,
+            **kwargs
         )
         result = await orchestrator.process_request(
             user_request=user_request,
@@ -1317,19 +1378,13 @@ async def process_user_request(
 
 def get_orchestrator_agent(
     model_id: str = "gpt-4o-mini",
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    debug_mode: bool = False,
     enable_web_agent: bool = True,
     enable_api_knowledge_agent: bool = False,
     enable_data_analysis_agent: bool = False,
     enable_travel_planner: bool = False,
-    db_url: str = 'postgresql+psycopg2://p4t:o3CCgX7StraZqvRH5GqrOFLuzt5R6C@vps-af24e24d.vps.ovh.net:30030/myboun',
-    memory_table_name: str = "agent_memory",
-    storage_table_name: str = "agent_sessions",
-    # Paramètres optionnels de l'agent
-    name: str = "Orchestrator Agent",
-    instructions: Optional[List[str]] = None,
-    tools: Optional[List[Callable]] = None,
-    user_id: Optional[str] = None,
-    session_id: Optional[str] = None,
     **kwargs
 ) -> OrchestratorAgent:
     """
@@ -1337,101 +1392,72 @@ def get_orchestrator_agent(
     
     Args:
         model_id (str): Identifiant du modèle OpenAI
+        user_id (Optional[str]): Identifiant unique de l'utilisateur
+        session_id (Optional[str]): Identifiant de session pour le suivi
+        debug_mode (bool): Mode de débogage
         enable_web_agent (bool): Activer l'agent de recherche web
         enable_api_knowledge_agent (bool): Activer l'agent de connaissances API
         enable_data_analysis_agent (bool): Activer l'agent d'analyse de données
         enable_travel_planner (bool): Activer l'agent de planification de voyage
-        db_url (str): URL de connexion à la base de données PostgreSQL
-        memory_table_name (str): Nom de la table de mémoire
-        storage_table_name (str): Nom de la table de stockage
     
     Returns:
         OrchestratorAgent: Agent orchestrateur configuré
     """
-    return OrchestratorAgent(
+    # Définir les instructions de base
+    instructions = [
+        "🤖 Agent d'Orchestration Intelligent pour la Résolution Adaptative des Requêtes",
+        "Objectif Principal : Traiter Efficacement Chaque Requête avec une Approche Multi-Stratégique",
+        "",
+        "🔍 Stratégies de Traitement :",
+        "1. Analyse Contextuelle Approfondie :",
+        "   - Évaluer la requête initiale",
+        "   - Consulter la mémoire utilisateur pour enrichissement",
+        "   - Déterminer le mode de traitement optimal",
+        "",
+        "2. Modes de Résolution :",
+        "   a) Traitement Direct :",
+        "      - Résoudre immédiatement si la requête est simple",
+        "      - Utiliser les connaissances existantes",
+        "   b) Enrichissement Contextuel :",
+        "      - Consulter et intégrer les informations de la mémoire utilisateur",
+        "      - Affiner et compléter la requête initiale",
+        "   c) Décomposition Stratégique :",
+        "      - Fragmenter les tâches complexes en sous-tâches précises",
+        "      - Attribuer chaque sous-tâche à l'agent spécialisé",
+        "",
+        "3. Routage Intelligent :",
+        "   - Sélectionner dynamiquement l'agent le plus adapté :",
+        "     * Analyse sémantique de la requête",
+        "     * Correspondance avec les compétences des agents disponibles",
+        "     * Évaluation de la complexité et du contexte",
+        "     * Capacité à créer ou adapter des agents dynamiquement",
+        "",
+        "🧠 Principes Opérationnels :",
+        "- Être le point d'entrée unique et adaptatif pour toutes les requêtes",
+        "- Maximiser la précision et la pertinence de la réponse",
+        "- Maintenir une traçabilité complète du processus de résolution",
+        "- S'adapter dynamiquement aux différents types et complexités de demandes"
+    ]
+
+    # Initialisation du modèle
+    llm = OpenAIChat(
+        model=model_id,
+        temperature=0.2
+    )
+
+    # Créer l'agent orchestrateur
+    orchestrator_agent = OrchestratorAgent(
         model_id=model_id,
+        instructions=instructions,
+        model=llm,
+        user_id=user_id,
+        session_id=session_id,
+        debug_mode=debug_mode,
         enable_web_agent=enable_web_agent,
         enable_api_knowledge_agent=enable_api_knowledge_agent,
         enable_data_analysis_agent=enable_data_analysis_agent,
         enable_travel_planner=enable_travel_planner,
-        # Paramètres de mémoire et stockage
-        db_url=db_url,
-        memory_table_name=memory_table_name,
-        storage_table_name=storage_table_name,
-        # Paramètres optionnels de l'agent
-        name=name,
-        instructions=instructions,
-        tools=tools,
-        user_id=user_id,
-        session_id=session_id,
         **kwargs
     )
 
-# Exemple d'utilisation
-if __name__ == "__main__":
-    import logging
-    import json
-
-    # Configuration du logging
-    logging.basicConfig(
-        level=logging.INFO, 
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    def extract_content(chunk):
-        """
-        Extraire le contenu textuel d'un chunk de différents types
-        """
-        # Si c'est un tuple
-        if isinstance(chunk, tuple):
-            # Si le tuple a plus d'un élément, prendre le deuxième
-            if len(chunk) > 1:
-                chunk = chunk[1]
-            else:
-                chunk = ""
-        
-        # Si c'est une liste, convertir en chaîne
-        if isinstance(chunk, list):
-            chunk = " ".join(str(item) for item in chunk)
-        
-        # Convertir en chaîne si ce n'est pas déjà une chaîne
-        return str(chunk)
-
-    def test_orchestrator():
-        # Créer l'agent orchestrateur sans agent web
-        orchestrator = get_orchestrator_agent(
-            enable_web_agent=True  # Activer la recherche web
-        )
-        
-        # Exemples de requêtes de test
-        test_requests = [
-            "Faire une analyse comparative des performances des startups tech en 2024"
-        ]
-        
-        for request in test_requests:
-            print(f"\n🚀 Traitement de la requête : {request}")
-            
-            # Utiliser la génération de réponse directe
-            try:
-                # Récupérer le générateur de réponse
-                resp = orchestrator.run(request)
-                
-                # Collecter et afficher les résultats par morceaux
-                print("\n📊 Résultats :")
-                full_result = ""
-                for chunk in resp:
-                    # Extraire le contenu du chunk
-                    chunk_content = extract_content(chunk)
-                    
-                    print(chunk_content, end='', flush=True)
-                    full_result += chunk_content
-                
-                print("\n\n🔍 Résumé :")
-                print(f"Longueur totale de la réponse : {len(full_result)} caractères")
-            except Exception as e:
-                print(f"Erreur lors de l'exécution : {e}")
-                import traceback
-                traceback.print_exc()
-    
-    # Exécuter le test
-    test_orchestrator()
+    return orchestrator_agent
