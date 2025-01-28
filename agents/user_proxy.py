@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from datetime import datetime
 from typing import Optional
 import pika
+import threading
 
 from phi.agent import Agent, AgentMemory
 from phi.model.openai import OpenAIChat
@@ -20,7 +21,6 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from sqlalchemy import text
 
-import threading
 import queue
 from typing import Callable, Any, Optional
 from datetime import datetime, timedelta
@@ -395,16 +395,18 @@ def wait_for_task_completion(
         )
     )
     
-    # Nom de la queue de retour
+    # Noms des queues
     result_queue_name = 'queue_retour_orchestrator'
+    chatbot_queue_name = 'queue_chatbot'
     
     try:
         # Établir la connexion
         with pika.BlockingConnection(connection_params) as connection:
             channel = connection.channel()
             
-            # Déclarer la queue si elle n'existe pas
+            # Déclarer les queues si elles n'existent pas
             channel.queue_declare(queue=result_queue_name, durable=True)
+            channel.queue_declare(queue=chatbot_queue_name, durable=True)
             
             # Temps de début
             start_time = time.time()
@@ -419,19 +421,40 @@ def wait_for_task_completion(
                     continue
                 
                 try:
-                    # Décoder le message
-                    message = json.loads(body.decode('utf-8'))
+                    # Décoder le message en supprimant les caractères de retour chariot et les espaces supplémentaires
+                    message_str = body.decode('utf-8').strip()
+                    
+                    # Nettoyer manuellement la chaîne JSON
+                    message_str = message_str.replace('\r\n', '').replace('\n', '').replace(' ', '')
+                    
+                    # Ajouter des virgules manquantes si nécessaire
+                    if message_str.startswith(' {'):
+                        message_str = '{' + message_str[2:]
+                    
+                    # Tenter de décoder le JSON
+                    message = json.loads(message_str)
                     
                     # Vérifier si c'est le bon message
                     if (message.get('session_id') == session_id and 
                         message.get('status') == 'completed'):
                         
-                        # Acquitter le message
+                        # Acquitter le message de la queue originale
                         channel.basic_ack(method_frame.delivery_tag)
+                        
+                        # Transférer le message dans queue_chatbot
+                        channel.basic_publish(
+                            exchange='',
+                            routing_key=chatbot_queue_name,
+                            body=json.dumps(message),
+                            properties=pika.BasicProperties(
+                                delivery_mode=2  # Message persistant
+                            )
+                        )
                         
                         # Log du message complet
                         logger.info(f"Message de complétion reçu pour la session {session_id} :")
                         logger.info(json.dumps(message, indent=2))
+                        logger.info(f"Message transféré dans la queue {chatbot_queue_name}")
                         
                         # Retourner le message complet
                         return json.dumps(message, indent=2)
@@ -439,8 +462,24 @@ def wait_for_task_completion(
                     # Si pas le bon message, le remettre dans la queue
                     channel.basic_nack(method_frame.delivery_tag, requeue=True)
                 
-                except json.JSONDecodeError:
-                    logger.error(f"Erreur de décodage JSON pour le message : {body}")
+                except json.JSONDecodeError as e:
+                    # Log de l'erreur détaillée
+                    logger.error(f"Erreur de décodage JSON : {e}")
+                    logger.error(f"Message brut reçu : {body}")
+                    logger.error(f"Message nettoyé : {message_str}")
+                    
+                    # Tenter un décodage plus permissif
+                    try:
+                        # Utiliser un décodeur JSON plus permissif
+                        import ast
+                        message = ast.literal_eval(body.decode('utf-8'))
+                        
+                        # Si le décodage réussit, convertir en JSON
+                        message_json = json.dumps(message)
+                        logger.info(f"Décodage réussi avec ast.literal_eval : {message_json}")
+                    except Exception as ast_error:
+                        logger.error(f"Échec du décodage avec ast.literal_eval : {ast_error}")
+                    
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
                 
                 # Attendre un peu avant la prochaine vérification
@@ -483,13 +522,34 @@ def get_user_proxy_agent(
         Returns:
             str: Résultat de la soumission de tâche
         """
-
-    
         # Générer un nouvel identifiant de session
         current_session_id = str(uuid.uuid4())
         
         # Date courante
         date = datetime.now().isoformat()
+        
+        # Créer un événement pour signaler la complétion
+        task_completed = threading.Event()
+        task_result = [None]
+        
+        def wait_for_completion():
+            """
+            Fonction pour attendre la complétion en arrière-plan
+            """
+            try:
+                result = wait_for_task_completion(session_id=current_session_id)
+                task_result[0] = result
+            except Exception as e:
+                task_result[0] = f"Erreur : {str(e)}"
+            finally:
+                task_completed.set()
+        
+        # Démarrer le thread d'attente
+        completion_thread = threading.Thread(
+            target=wait_for_completion, 
+            daemon=True  # Thread en arrière-plan
+        )
+        completion_thread.start()
         
         # Envoi à RabbitMQ
         send2RabbitMQ(
@@ -526,10 +586,10 @@ def get_user_proxy_agent(
         # Log du message de retour attendu
         logger.info(f"Message de retour attendu : {json.dumps(message_retour, indent=2)}")
         
-        # Attendre la complétion de la tâche
-        return wait_for_task_completion(session_id=current_session_id)
-        
-    # Configuration de l'agent
+        # Retourner immédiatement un message indiquant que la tâche est en cours
+        return f"Tâche {current_session_id} en cours de traitement"
+    
+        # Configuration de l'agent
     agent_base = Agent(
         instructions=[
             "Tu es un agent spécialisé dans la transmission de messages via RabbitMQ.",
