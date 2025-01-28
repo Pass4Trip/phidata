@@ -3,6 +3,7 @@ import os
 import logging
 from dotenv import load_dotenv
 import json
+import uuid
 from datetime import datetime, timedelta
 
 from phi.agent import Agent, AgentMemory
@@ -37,6 +38,8 @@ def build_postgres_url():
 # Générer l'URL de base de données
 db_url = build_postgres_url()
 
+model_id = os.getenv('model_id', 'gpt-4o-mini')
+
 # Configuration du logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # Réduire le niveau de log
@@ -49,7 +52,7 @@ logger.addHandler(handler)
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
 def get_agent_base(
-    model_id: str = "gpt-4o-mini",
+    #model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     debug_mode: bool = False,
@@ -74,6 +77,10 @@ def get_agent_base(
         Agent: Un agent conversationnel polyvalent configuré.
     """
 
+    # Générer un session_id unique si non fourni
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        logger.info(f"🆔 Génération d'un nouvel identifiant de session : {session_id}")    
 
     # Créer l'agent Phidata
     agent_base = Agent(
@@ -88,7 +95,9 @@ def get_agent_base(
             "5. Si tu ne peux pas répondre à une question, explique pourquoi de manière constructive",
             "6. Adapte ton niveau de langage et de détail au contexte de la question"
         ],
-        debug_mode=True,  # Forcer le mode débogage
+        model_id=model_id,
+        debug_mode=debug_mode,  # Forcer le mode débogage
+        agent_id="agent_base",
         user_id=user_id,
         session_id=session_id,
         name="Agent Base",

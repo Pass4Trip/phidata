@@ -42,4 +42,5 @@ def lazy_import(module_path: str, item_name: Optional[str] = None) -> Callable[.
 # Exemples de lazy imports
 get_web_searcher = lazy_import('agents.web', 'get_web_searcher')
 get_api_knowledge_agent = lazy_import('agents.api_knowledge', 'get_api_knowledge_agent')
+get_user_proxy_agent = lazy_import('agents.user_proxy', 'get_user_proxy_agent')
 # Ajoutez d'autres imports paresseux selon vos besoins

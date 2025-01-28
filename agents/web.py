@@ -2,13 +2,15 @@ from typing import Optional, Any, Dict, Callable
 import os
 import logging
 from dotenv import load_dotenv
+import uuid
 import json
 from datetime import datetime, timedelta
 
-from phi.agent import Agent, AgentMemory
 from phi.model.openai import OpenAIChat
+from phi.agent import Agent, AgentMemory
 from phi.storage.agent.postgres import PgAgentStorage
 from phi.memory.db.postgres import PgMemoryDb
+
 
 # Importer les nouveaux outils de recherche
 from llm_axe.models import llm_axe_OpenAIChat
@@ -52,6 +54,8 @@ logger.addHandler(handler)
 
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
+
+
 def get_web_searcher(
     model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
@@ -72,6 +76,11 @@ def get_web_searcher(
     Returns:
         Agent: Un agent de recherche web configuré.
     """
+
+    # Générer un session_id unique si non fourni
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        logger.info(f"🆔 Génération d'un nouvel identifiant de session : {session_id}")    
 
     # Créer un outil de recherche web personnalisé
     def web_search_tool(query: str):
