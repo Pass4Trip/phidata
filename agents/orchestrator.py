@@ -1180,7 +1180,7 @@ class OrchestratorAgent:
         
         # Utiliser l'agent orchestrateur pour synthétiser
         synthesis_prompt = f"""
-        Synthétise les résultats suivants de manière concise et claire :
+        Synthétise les résultats suivants de manière concise, claire et légèrement humoristique :
         
         {chr(10).join(text_results)}
         
@@ -1188,6 +1188,9 @@ class OrchestratorAgent:
         - Si plusieurs étapes, numérote et résume chaque étape
         - Fournis un résumé final qui capture l'essence de tous les résultats
         - Sois concis mais informatif
+        - Ajoute une touche d'humour subtil sans compromettre la clarté
+        - Utilise des analogies amusantes si approprié
+        - Inclus une remarque spirituelle ou un jeu de mots léger à la fin
         """
         
         # Utiliser le modèle pour générer la synthèse

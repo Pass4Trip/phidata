@@ -161,6 +161,80 @@ logger.addHandler(handler)
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
 
+def get_user_preferences(
+    query: str,
+    user_id: str, 
+    db_url: Optional[str] = None, 
+    table_name: str = "user_proxy_memories"
+) -> Dict[str, Any]:
+    """
+    Récupère les mémoires d'un utilisateur à partir de la mémoire Phidata.
+    
+    Args:
+        user_id (str): Identifiant de l'utilisateur
+        db_url (Optional[str]): URL de connexion à la base de données PostgreSQL
+        table_name (str): Nom de la table de mémoire
+    
+    Returns:
+        List[str]: Liste des mémoires de l'utilisateur
+    """
+    # Utiliser l'URL de base de données globale si non fournie
+    if db_url is None:
+        db_url = globals().get('db_url')
+    
+    if not db_url:
+        logger.error("Aucune URL de base de données fournie.")
+        return []
+    
+    try:
+        # Créer une mémoire d'agent avec la base de données PostgreSQL
+        agent_memory = AgentMemory(
+            db=PgMemoryDb(
+                table_name=table_name, 
+                db_url=db_url
+            ),
+            # Définir l'ID utilisateur
+            user_id=user_id
+        )
+        
+        # Charger les mémoires de l'utilisateur
+        memories = agent_memory.db.read_memories(user_id=user_id)
+        
+        # Stocker les mémoires utilisateur
+        user_memories = []
+        
+        # Parcourir toutes les mémoires
+        for memory in memories:
+            try:
+                memory_content = None
+                
+                if isinstance(memory.memory, dict):
+                    memory_content = memory.memory.get('memory')
+                elif isinstance(memory.memory, str):
+                    try:
+                        memory_dict = json.loads(memory.memory)
+                        memory_content = memory_dict.get('memory')
+                    except json.JSONDecodeError:
+                        memory_content = memory.memory
+                else:
+                    memory_content = str(memory.memory)
+                
+                if memory_content:
+                    user_memories.append(memory_content)
+            
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du traitement de la mémoire : {e}")
+                pass
+        
+        logger.info(f"📋 Nombre de mémoires extraites : {len(user_memories)}")
+        
+        return user_memories
+    
+    except Exception as e:
+        logger.error(f"Erreur lors du chargement des mémoires : {e}")
+        return []
+
+
 class UserTaskManager:
     """
     Gestionnaire avancé de tâches utilisateur avec intégration Phidata
@@ -511,6 +585,57 @@ def wait_for_task_completion(
         logger.info(f" Fin de wait_for_task_completion pour la session {session_id}")
 
 
+def enrich_query(self, query: str) -> str:
+    """
+    Enrichit la requête utilisateur avec des informations pertinentes de la mémoire
+
+    Args:
+        query (str): La requête utilisateur originale
+
+    Returns:
+        str: La requête enrichie
+    """
+    logger.info(f"🔍 Enrichissement de la requête : '{query}'")
+    
+    try:
+        # Récupérer les informations pertinentes de la mémoire
+        relevant_info = self.memory.get_relevant(query)
+        
+        # Préparer le contexte pour l'enrichissement
+        context = "\n".join(relevant_info)
+        
+        # Utiliser l'API OpenAI pour enrichir la requête
+        response = self._openai_client.chat.completions.create(
+            model=self.model_id,
+            messages=[
+                {
+                    "role": "system", 
+                    "content": """
+                    Tu es un expert en enrichissement de requêtes.
+                    Utilise le contexte fourni pour enrichir la requête de manière pertinente.
+                    Garde l'essentiel de la requête originale, mais ajoute des détails ou précisions utiles.
+                    """
+                },
+                {
+                    "role": "user", 
+                    "content": f"Requête originale : {query}\n\nContexte :\n{context}"
+                }
+            ],
+            max_tokens=150,
+            temperature=0.7
+        )
+        
+        enriched_query = response.choices[0].message.content.strip()
+        logger.info(f"Requête enrichie : '{enriched_query}'")
+        
+        return enriched_query
+    
+    except Exception as e:
+        logger.error(f"Erreur lors de l'enrichissement de la requête : {e}")
+        return query  # Retourner la requête originale en cas d'erreur
+
+
+
 def get_user_proxy_agent(
     model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
@@ -581,6 +706,8 @@ def get_user_proxy_agent(
         else:
             logger.warning(f" Le thread de completion ne semble pas actif pour la tâche {current_session_id}")
         
+        query = get_user_preferences(query, user_id=user_id, db_url=db_url)
+
         # Envoi à RabbitMQ
         send2RabbitMQ(
             query=query, 
@@ -625,6 +752,16 @@ def get_user_proxy_agent(
         instructions=[
             "Tu es un agent intelligent avec deux modes de fonctionnement : transmission et traitement direct.",
             "",
+            "- Règles de routage entre les 2 modes :",
+            "  * Mode TRAITEMENT DIRECT :",
+            "    - Pour les questions simples, générales ou relatives aux infos de l'utilisateur",
+            "    - Exemples : salutations, préférences, informations basiques",
+            "  * Mode TRANSMISSION DE REQUÊTE :",
+            "    - Pour les demandes complexes nécessitant :",
+            "      1. Recherche web",
+            "      2. Décomposition de la tâche",
+            "      3. Utilisation d'outils spécifiques",
+            "    - Exemples : analyse de données, recherches approfondies, tâches multi-étapes",
             "MODE 1 : TRANSMISSION DE REQUÊTE",
             "- Objectif : Transmettre des requêtes complexes à un système de traitement",
             "- Workflow :",
@@ -638,35 +775,51 @@ def get_user_proxy_agent(
             "  4. Envoyer le message via RabbitMQ",
             "  5. Sauvegarder la tâche en base de données",
             "  6. Attendre le message de complétion dans 'queue_retour_orchestrator'",
-            "",
-            "MODE 2 : TRAITEMENT DIRECT",
-            "- Objectif : Traiter immédiatement certaines requêtes spécifiques",
-            "- Conditions de traitement direct :",
-            "  * La requête concerne l'historique ou l'état des tâches",
-            "  * Types de requêtes autorisées :",
-            "    - Lister les tâches en cours",
-            "    - Récupérer le statut d'une tâche précédente",
-            "    - Obtenir des informations sur les sessions passées",
-            "- Méthode de traitement :",
-            "  1. Analyser la requête",
-            "  2. Vérifier si elle correspond aux critères de traitement direct",
-            "  3. Utiliser la mémoire de l'agent pour générer une réponse",
-            "",
-            "RÈGLES GÉNÉRALES :",
-            "- Toujours choisir le mode de traitement le plus approprié",
-            "- En mode transmission, utiliser submit_task(query)",
-            "- En mode traitement direct, répondre directement via la mémoire",
             "- Exemples de requêtes en mode transmission :",
             "  * 'Quel est le fonctionnement du moteur électrique ?'",
             "  * 'Résume le dernier rapport technique'",
+            "- En mode transmission, utiliser submit_task(query)",
+            "", 
+            "",
+            "MODE 2 : TRAITEMENT DIRECT",
+            "- Objectif : Répondre rapidement aux requêtes simples et gérer les interactions directes",
+            "- Workflow pour le traitement direct :",
+            "  1. Analyse la requête de l'utilisateur",
+            "  2. Détermine si une réponse directe est appropriée",
+            "  3. Formule une réponse adaptée en utilisant le style de communication défini",
+            "  4. Envoie la réponse à l'utilisateur",
+            "- Style de communication :",
+            "  * Sois sympathique et naturel dans tes réponses",
+            "  * Garde un ton léger mais professionnel",
+            "  * Utilise quelques emojis pour illustrer tes messages",
+            "  * Important : En tant que LLM de l'agent User Proxy, tu es responsable de générer",
+            "  * la réponse finale à l'utilisateur. Assure-toi que ta réponse soit complète,",
+            "  * pertinente et respecte le style de communication demandé.",
+            "  * Sois sympathique et naturel dans tes réponses",
+            "  * Garde un ton léger mais professionnel",
+            "  * Utilise quelques emojis pour illustrer tes messages",
             "- Exemples de requêtes en mode direct :",
-            "  * 'Quelles sont mes tâches en cours ?'",
-            "  * 'Quel était le résultat de ma dernière recherche ?'"
+            "  * 'Quelles est la date de naissance de Henri 4 roi de France ?'",
+            "  * 'Quelle est la capitale de la France ?'",
+            "- En mode traitement direct, utilise au maximulm tes connaisances sur l'utuilisateur pour répondre",
+            "- Capacité à comprendre et identifier des dates relatives :",
+            "  * 'hier', 'aujourd'hui', 'demain'",
+            "  * 'la semaine dernière', 'le mois prochain', 'l'année prochaine'",
+            "  * 'dans 3 jours', 'il y a 2 semaines'",
+            "  * 'le premier lundi du mois prochain'",
+            "- Exemples de requêtes de date :",
+            "  * 'Quelle est la date d'aujourd'hui ?'",
+            "  * 'Donne-moi la date du dimanche dans 2 semaines'",
+            "  * 'Quel jour serons-nous dans 10 jours ?'",
+            "  * 'Quelle était la date il y a 3 mois ?'",
+            "- Exemple de calcul de date :",
+            "  Si aujourd'hui nous sommes le mercredi 29 janvier 2025,",
+            "  alors 'le deuxième mardi du mois prochain' sera le mardi 11 février 2025",
         ],
         model=OpenAIChat(
             model=model_id,
             temperature=0.3,  # Température basse pour des réponses plus déterministes
-            max_tokens=150  # Limiter la longueur des réponses
+            max_tokens=500  # Limiter la longueur des réponses
         ),
         tools=[
             submit_task,  # Nouvelle méthode de soumission de tâche

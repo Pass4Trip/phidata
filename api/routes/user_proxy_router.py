@@ -33,7 +33,7 @@ def get_waiting_message(query: str) -> str:
             model="gpt-4o-mini",
             temperature=0.7,
             messages=[
-                {"role": "system", "content": """Tu es un assistant très sympathique et drôle.
+                {"role": "system", "content": """Tu es un assistant très sympathique et drôle mais sans etre lourd qui ne dois traiter que les demandes de génération de phrases d'attentes.
                 Ta mission est de générer des réponses courtes et amusantes pour dire à l'utilisateur que sa demande est en cours de traitement.
                 - Utilise un ton léger et amical
                 - Ajoute des emojis appropriés
