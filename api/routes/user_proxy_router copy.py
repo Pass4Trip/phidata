@@ -38,13 +38,18 @@ async def process_user_proxy_request(
         
         # Exécuter l'agent avec la requête et récupérer la réponse
         try:
-            response = user_proxy_agent.run(query)
+            resp_generator = user_proxy_agent.run(query)
             
-            # Extraire le contenu du message de l'assistant
-            messages = response.messages
-            assistant_message = next(msg for msg in messages if msg.role == 'assistant')
-            result_content = assistant_message.content
+            # Collecter tous les résultats du générateur
+            responses = []
+            try:
+                for resp in resp_generator:
+                    responses.append(str(resp))
+            except StopIteration:
+                pass
             
+            # Construire la réponse
+            result_content = " ".join(responses).strip()
             if not result_content:
                 result_content = "Aucune réponse générée"
             
