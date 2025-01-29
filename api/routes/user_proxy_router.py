@@ -7,7 +7,16 @@ from pydantic import BaseModel
 from agents.user_proxy import get_user_proxy_agent
 
 # Configurer le logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Ajouter un handler pour la console si nécessaire
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+logger.addHandler(console_handler)
 
 class UserProxyResponse(BaseModel):
     content: str
@@ -43,10 +52,16 @@ async def process_user_proxy_request(
             # Extraire le contenu du message de l'assistant
             messages = response.messages
             assistant_message = next(msg for msg in messages if msg.role == 'assistant')
-            result_content = assistant_message.content
-            
-            if not result_content:
-                result_content = "Aucune réponse générée"
+            logger.info(f"Message complet de l'assistant: {assistant_message}")
+
+            # Si l'assistant utilise un tool_call (comme submit_task)
+            if assistant_message.tool_calls and not assistant_message.content:
+                # Vérifier si c'est un submit_task
+                tool_call = assistant_message.tool_calls[0]
+                if tool_call['function']['name'] == 'submit_task':
+                    result_content = "Votre demande est en cours de traitement par l'agent orchestrator. Vous recevrez bientôt une réponse."
+            else:
+                result_content = assistant_message.content or "Aucune réponse générée"
             
             logger.info(f"Résultat obtenu : {result_content}")
         

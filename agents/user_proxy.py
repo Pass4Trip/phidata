@@ -434,7 +434,7 @@ def wait_for_task_completion(
                     logger.info(f" Message brut reçu : {message_str[:200]}...")
                     
                     # Nettoyer manuellement la chaîne JSON
-                    message_str = message_str.replace('\r\n', '').replace('\n', '').replace(' ', '')
+                    message_str = message_str.replace('\r\n', '').replace('\n', '')
                     
                     # Ajouter des virgules manquantes si nécessaire
                     if message_str.startswith(' {'):
@@ -602,22 +602,23 @@ def get_user_proxy_agent(
         logger.info(f"En attente du message de complétion pour la session {current_session_id}")
         
         # Préparer le message de retour attendu
-        message_retour = {
-            "session_id": current_session_id,
-            "status": "completed", 
-            "query": query, 
-            "result": "Résultat détaillé de la tâche",
-            "metadata": { 
-                "sources": ["RabbitMQ"], 
-                "timestamp": datetime.now().isoformat() 
-            }
-        }
+        # message_retour = {
+        #     "session_id": current_session_id,
+        #     "status": "completed", 
+        #     "query": query, 
+        #     "result": "Résultat détaillé de la tâche",
+        #     "metadata": { 
+        #         "sources": ["RabbitMQ"], 
+        #         "timestamp": datetime.now().isoformat() 
+        #     }
+        # }
         
-        # Log du message de retour attendu
-        logger.info(f"Message de retour attendu : {json.dumps(message_retour, indent=2)}")
+        # # Log du message de retour attendu
+        # logger.info(f"Message de retour attendu : {json.dumps(message_retour, indent=2)}")
         
         # Retourner immédiatement un message indiquant que la tâche est en cours
-        return f"Tâche {current_session_id} en cours de traitement"
+        return json.dumps(f"Tâche {current_session_id} en cours de traitement")
+        
     
         # Configuration de l'agent
     agent_base = Agent(
