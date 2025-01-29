@@ -1,14 +1,10 @@
 import os
 import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import asyncio
 import logging
 import traceback
 import uuid
 import json
-import threading
-import pika
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union, Callable
 from dataclasses import dataclass, field
@@ -21,6 +17,8 @@ from phi.model.openai import OpenAIChat
 from agents.web import get_web_searcher
 from agents.agent_base import get_agent_base
 
+
+
 from agents.settings import agent_settings
 from agents.orchestrator_prompts import (
     get_task_decomposition_prompt,
@@ -30,21 +28,28 @@ from agents.orchestrator_prompts import (
 
 from utils.colored_logging import get_colored_logger
 
+
+
 agent_memory_file: str = "orchestrator_agent_memory.db"
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
+
+# Configuration du logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Ajout d'un handler de console si nécessaire
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+# Ajouter le répertoire parent au PYTHONPATH
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
+# Ajouter le handler au logger s'il n'est pas déjà présent
 if not logger.handlers:
     logger.addHandler(console_handler)
 
@@ -1085,8 +1090,7 @@ class OrchestratorAgent:
     async def process_request(
         self, 
         user_request: str, 
-        debug_mode: bool = False,
-        session_id: str = None
+        debug_mode: bool = False
     ) -> Dict[str, Any]:
         """
         Traiter une requête de bout en bout
@@ -1108,22 +1112,20 @@ class OrchestratorAgent:
             # Synthétiser les résultats
             synthesized_result = await self._synthesize_results(subtask_results)
             
-            logger.info(f"Message reçu - Session ID: {session_id}")
-            
             # Publier un message RabbitMQ avec la synthèse
-            synthesis_message = {
-                "session_id": session_id,
-                "status": "completed", 
-                "query": user_request, 
-                "result": synthesized_result,
-                "metadata": {
-                    "sources": ["RabbitMQ"],
-                    "timestamp": datetime.now().isoformat()
+            synthesis_message = self._create_task_message(
+                task_type='synthesis',
+                request_id=task_ledger.task_id,
+                original_request=user_request,
+                status='completed',
+                result={
+                    "content": synthesized_result,
+                    "content_type": "text/plain"
                 }
-            }
+            )
             
             # Publier le message de synthèse
-            self._publish_rabbitmq_message('queue_retour_orchestrator', synthesis_message)
+            self._publish_rabbitmq_message('queue_progress_task', synthesis_message)
             
             # Log détaillé
             logger.info(f"📊 Résultat synthétisé : {synthesized_result}")
@@ -1318,13 +1320,9 @@ async def process_user_request(
             session_id=session_id,
             **kwargs
         )
-
-        logger.info(f"Message reçu - Session ID: {session_id}, User ID: {user_id}")
-
         result = await orchestrator.process_request(
             user_request=user_request,
-            debug_mode=debug_mode,
-            session_id=session_id
+            debug_mode=debug_mode
         )
         
         # Extraction de la synthèse
@@ -1511,7 +1509,6 @@ def start_user_proxy_queue_listener():
                         logger.error(f"Message incomplet : {message}")
                         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                         return
-                
                     
                     # Log du message reçu
                     logger.info(f"Message reçu - Session ID: {session_id}, User ID: {user_id}")

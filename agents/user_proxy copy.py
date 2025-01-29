@@ -378,11 +378,10 @@ def wait_for_task_completion(
     Returns:
         str: Résultat de la tâche ou message d'erreur
     """
-
+    import pika
     import json
     import time
     import logging
-
     
     logger = logging.getLogger('agents.user_proxy')
     
@@ -401,37 +400,29 @@ def wait_for_task_completion(
     chatbot_queue_name = 'queue_chatbot'
     
     try:
-        logger.info(f" Démarrage de wait_for_task_completion pour session {session_id}")
-        logger.info(f" Paramètres de connexion RabbitMQ : {connection_params}")
-        
         # Établir la connexion
         with pika.BlockingConnection(connection_params) as connection:
             channel = connection.channel()
             
             # Déclarer les queues si elles n'existent pas
-            logger.info(f" Déclaration des queues : {result_queue_name}, {chatbot_queue_name}")
             channel.queue_declare(queue=result_queue_name, durable=True)
             channel.queue_declare(queue=chatbot_queue_name, durable=True)
             
             # Temps de début
             start_time = time.time()
             
-            logger.info(f" Début de la boucle d'attente. Timeout : {timeout} secondes")
             while (time.time() - start_time) < timeout:
                 # Récupérer un message
                 method_frame, properties, body = channel.basic_get(queue=result_queue_name)
                 
                 if method_frame is None:
                     # Pas de message, attendre un peu
-                    logger.debug(f" Aucun message dans la queue {result_queue_name}. Attente...")
                     time.sleep(poll_interval)
                     continue
                 
                 try:
                     # Décoder le message en supprimant les caractères de retour chariot et les espaces supplémentaires
                     message_str = body.decode('utf-8').strip()
-                    
-                    logger.info(f" Message brut reçu : {message_str[:200]}...")
                     
                     # Nettoyer manuellement la chaîne JSON
                     message_str = message_str.replace('\r\n', '').replace('\n', '').replace(' ', '')
@@ -443,19 +434,14 @@ def wait_for_task_completion(
                     # Tenter de décoder le JSON
                     message = json.loads(message_str)
                     
-                    logger.info(f" Message JSON décodé : {json.dumps(message, indent=2)}")
-                    
                     # Vérifier si c'est le bon message
                     if (message.get('session_id') == session_id and 
                         message.get('status') == 'completed'):
-                        
-                        logger.info(f" Message correspondant trouvé pour la session {session_id}")
                         
                         # Acquitter le message de la queue originale
                         channel.basic_ack(method_frame.delivery_tag)
                         
                         # Transférer le message dans queue_chatbot
-                        logger.info(f" Transfert du message vers {chatbot_queue_name}")
                         channel.basic_publish(
                             exchange='',
                             routing_key=chatbot_queue_name,
@@ -466,21 +452,21 @@ def wait_for_task_completion(
                         )
                         
                         # Log du message complet
-                        logger.info(f" Message de complétion final pour la session {session_id}")
+                        logger.info(f"Message de complétion reçu pour la session {session_id} :")
                         logger.info(json.dumps(message, indent=2))
+                        logger.info(f"Message transféré dans la queue {chatbot_queue_name}")
                         
                         # Retourner le message complet
                         return json.dumps(message, indent=2)
                     
                     # Si pas le bon message, le remettre dans la queue
-                    logger.info(f" Message ne correspondant pas à la session {session_id}. Remis en queue.")
                     channel.basic_nack(method_frame.delivery_tag, requeue=True)
                 
                 except json.JSONDecodeError as e:
                     # Log de l'erreur détaillée
-                    logger.error(f" Erreur de décodage JSON : {e}")
-                    logger.error(f" Message brut reçu : {body}")
-                    logger.error(f" Message nettoyé : {message_str}")
+                    logger.error(f"Erreur de décodage JSON : {e}")
+                    logger.error(f"Message brut reçu : {body}")
+                    logger.error(f"Message nettoyé : {message_str}")
                     
                     # Tenter un décodage plus permissif
                     try:
@@ -490,9 +476,9 @@ def wait_for_task_completion(
                         
                         # Si le décodage réussit, convertir en JSON
                         message_json = json.dumps(message)
-                        logger.info(f" Décodage réussi avec ast.literal_eval : {message_json}")
+                        logger.info(f"Décodage réussi avec ast.literal_eval : {message_json}")
                     except Exception as ast_error:
-                        logger.error(f" Échec du décodage avec ast.literal_eval : {ast_error}")
+                        logger.error(f"Échec du décodage avec ast.literal_eval : {ast_error}")
                     
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
                 
@@ -500,15 +486,11 @@ def wait_for_task_completion(
                 time.sleep(poll_interval)
             
             # Timeout atteint
-            logger.warning(f" Timeout atteint pour la session {session_id}")
             return f"Timeout : pas de réponse pour la session {session_id} dans le délai imparti"
     
     except Exception as e:
-        logger.error(f" Erreur lors de l'attente de la complétion de tâche : {e}")
+        logger.error(f"Erreur lors de l'attente de la complétion de tâche : {e}")
         return f"Erreur : {str(e)}"
-    
-    finally:
-        logger.info(f" Fin de wait_for_task_completion pour la session {session_id}")
 
 
 def get_user_proxy_agent(
