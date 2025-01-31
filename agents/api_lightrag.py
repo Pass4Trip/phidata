@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 import json
 import uuid
 from datetime import datetime, timedelta
+import requests
+from requests import Response
+from typing import Dict
 
 from phi.agent import Agent, AgentMemory
 from phi.model.openai import OpenAIChat
@@ -42,7 +45,7 @@ model_id = os.getenv('model_id', 'gpt-4o-mini')
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)  # Réduire le niveau de log
+logger.setLevel(logging.DEBUG)  # Réduire le niveau de log
 handler = logging.StreamHandler()
 handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -51,7 +54,43 @@ logger.addHandler(handler)
 
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
-def get_agent_base(
+
+
+def query_lightrag_execute(question: str, user_id: str = "vinh") -> Dict[str, Any]:
+    """
+    Effectue une requête au endpoint LightRAG pour obtenir une réponse.
+    
+    Args:
+        question (str): La question à poser
+        user_id (str, optional): L'identifiant de l'utilisateur. Defaults to "vinh".
+    
+    Returns:
+        Dict[str, Any]: La réponse du endpoint LightRAG
+    """
+    url = "http://51.77.200.196:30080/query/"
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "question": question,
+        "user_id": user_id
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()  # Lève une exception pour les codes d'erreur HTTP
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Erreur lors de la requête LightRAG : {e}")
+        return {
+            "status": "error",
+            "content": f"Impossible de contacter le service LightRAG : {str(e)}"
+        }
+
+
+
+def get_agent_lightrag(
     model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
@@ -61,6 +100,9 @@ def get_agent_base(
     **kwargs
 ) -> Agent:
 
+
+    logger.info("ICI IN 0")    
+
     # Générer un session_id unique si non fourni
     if session_id is None:
         session_id = str(uuid.uuid4())
@@ -68,29 +110,39 @@ def get_agent_base(
 
     # Préparer les instructions initiales
     base_instructions = [
-        "Ton nom est AgentBase.",
-        "Tu es un agent conversationnel intelligent et polyvalent.",
-        "Tu es capable de répondre à une large variété de questions.",
+        "Ton nom est Agent LightRAG.",
+        "Tu es un agent conversationnel spécialisé dans l'utilisation du service LightRAG.",
         "Tes objectifs sont :",
-        "1. Analyser précisément la requête de l'utilisateur",
-        "2. Si la requête manque de précision, demander des éclaircissements",
-        "3. En cas de manque de clarté, pose des questions spécifiques pour :",
-        "   - Comprendre le contexte exact",
-        "   - Préciser les attentes de l'utilisateur",
-        "   - Obtenir les informations manquantes",
-        "4. Fournir une réponse TOUJOURS au format JSON structuré",
-        "5. Structure de la réponse JSON :",
-        "   - 'status': 'success', 'clarification_needed' ou 'error'",
-        "   - 'content': contenu de la réponse ou questions de clarification",
-        "   - 'metadata': informations supplémentaires (optionnel)",
-        "6. Si la question nécessite des précisions :",
-        "   - Retourne 'status': 'clarification_needed'",
-        "   - Liste les questions précises à poser dans 'content'",
-        "7. Si la question nécessite des connaissances spécifiques, utilise les outils à ta disposition",
-        "8. Reste toujours professionnel, bienveillant et utile",
-        "9. Si tu ne peux pas répondre à une question, explique pourquoi dans le champ 'content'",
-        "10. Adapte ton niveau de langage et de détail au contexte de la question",
+        "1. Pour CHAQUE requête utilisateur :",
+        "   - Utiliser OBLIGATOIREMENT l'outil query_lightrag",
+        "   - Passer la requête EXACTEMENT telle qu'elle est reçue",
+        "2. Retourner la réponse du endpoint LightRAG SANS MODIFICATION",
+        "3. Si le endpoint retourne une erreur :",
+        "   - Retourner l'erreur telle quelle",
+        "   - Ne PAS essayer de générer une réponse alternative",
+        "4. Structure de la réponse :",
+        "   - Utiliser EXACTEMENT la structure retournée par LightRAG",
+        "   - NE PAS modifier le format ou le contenu",
+        "5. Gestion des cas particuliers :",
+        "   - En cas d'impossibilité d'utiliser LightRAG, retourner un message d'erreur",
+        "   - Ne PAS chercher à contourner ou remplacer le service",
+        "6. Principes de base :",
+        "   - Transparence totale sur l'utilisation de LightRAG",
+        "   - Aucune modification ou interprétation de la réponse",
+        "7. Contexte de l'outil :",
+        "   - query_lightrag est l'UNIQUE moyen de répondre aux requêtes"
     ]
+
+    def query_lightrag(query: str):
+        query_result = query_lightrag_execute(query, user_id)
+        # Convertir le résultat en une chaîne de texte lisible
+        if isinstance(query_result, dict):
+            # Si c'est un dictionnaire, convertir en chaîne JSON lisible
+            return json.dumps(query_result, ensure_ascii=False)
+        elif isinstance(query_result, str):
+            return query_result
+        else:
+            return str(query_result)
 
     # Gestion de l'historique de session
     # --------------------------------
@@ -115,19 +167,19 @@ def get_agent_base(
         # 4. Personnaliser les réponses en fonction des interactions précédentes
 
     # Créer l'agent Phidata
-    agent_base = Agent(
+    agent_lightrag = Agent(
         instructions=base_instructions,
         model=OpenAIChat(
             model=model_id,
             temperature=0.7,
-            response_format={"type": "json_object"}  # Forcer la réponse JSON
         ),
-        output_format="json",  # Spécifier le format de sortie JSON
+        #output_format="json",  # Spécifier le format de sortie JSON
         debug_mode=debug_mode,  # Forcer le mode débogage
-        agent_id="agent_base",
+        agent_id="agent_lightrag",
         user_id=user_id,
         session_id=session_id,
-        name="Agent Base",
+        name="Agent LightRAG",
+        tools=[query_lightrag],  # Ajout des outils, dont LightRAG
         memory=AgentMemory(
             db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url),
             # Commentaires sur les options de mémoire :
@@ -143,8 +195,9 @@ def get_agent_base(
         storage=PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url),
     )
 
-    logger.debug("✅ Agent de recherche web initialisé avec succès")
-    return agent_base
+    logger.info("✅ Agent LightRAG initialisé avec succès")
+    return agent_lightrag
+
 
 
 # Bloc main pour lancer l'agent directement
@@ -165,42 +218,51 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Créer l'agent
-    agent = get_agent_base(
+    agent = get_agent_lightrag(
         model_id="gpt-4o-mini", 
         user_id=args.user_id, 
         session_id=args.session_id
     )
     
     # Mode interactif
-    print("🤖 Agent Base - Mode Interactif")
+    print("🤖 Agent LightRAG - Mode Interactif")
     print("Tapez 'exit' ou 'quit' pour quitter.")
     
     conversation_history = []
     
     while True:
         try:
-            # Demander une entrée utilisateur
-            user_input = input("\n> ")
-            
-            # Vérifier la sortie
-            if user_input.lower() in ['exit', 'quit']:
-                print("Au revoir ! 👋")
-                break
+            print("\n ICI 0 ")
+            user_input = "donne moi un restaurant a lyon au calme"
             
             # Obtenir la réponse de l'agent
+            print(f"\n🔍 Requête : {user_input}")
             response = agent.run(user_input)
 
+            print("\n ICI 1 ")  
             # Ajouter l'historique de conversation
             conversation_history.append({'role': 'user', 'content': user_input})
-            conversation_history.append({'role': 'assistant', 'content': response.content if hasattr(response, 'content') else str(response)})
+            
+            # Gérer différents types de réponses
+            if hasattr(response, 'content'):
+                content = response.content
+            elif isinstance(response, str):
+                content = response
+            else:
+                content = str(response)
+            
+            print(f"\n🤖 Type de réponse : {type(content)}")
+            print(f"\n🤖 Contenu de la réponse : {content}")
+            
+            conversation_history.append({'role': 'assistant', 'content': content})
 
+            print("\n ICI 2 ")
             # Afficher la réponse
-            content = response.content if hasattr(response, 'content') else str(response)
             print("\n🤖 Réponse :", content)
         
         except KeyboardInterrupt:
-            print("\n\nInterruption. Au revoir ! 👋")
+            print("Au revoir ! 👋")
             break
         except Exception as e:
-            print(f"Erreur : {e}")
+            print(f"\n❌ Erreur : {e}")
             break

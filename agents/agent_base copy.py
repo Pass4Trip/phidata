@@ -57,7 +57,6 @@ def get_agent_base(
     session_id: Optional[str] = None,
     debug_mode: bool = False,
     stream: bool = False,
-    conversation_history: Optional[list] = None,  # Paramètre pour l'historique de session
     **kwargs
 ) -> Agent:
 
@@ -66,57 +65,24 @@ def get_agent_base(
         session_id = str(uuid.uuid4())
         logger.info(f"🆔 Génération d'un nouvel identifiant de session : {session_id}")    
 
-    # Préparer les instructions initiales
-    base_instructions = [
-        "Ton nom est AgentBase.",
-        "Tu es un agent conversationnel intelligent et polyvalent.",
-        "Tu es capable de répondre à une large variété de questions.",
-        "Tes objectifs sont :",
-        "1. Analyser précisément la requête de l'utilisateur",
-        "2. Si la requête manque de précision, demander des éclaircissements",
-        "3. En cas de manque de clarté, pose des questions spécifiques pour :",
-        "   - Comprendre le contexte exact",
-        "   - Préciser les attentes de l'utilisateur",
-        "   - Obtenir les informations manquantes",
-        "4. Fournir une réponse TOUJOURS au format JSON structuré",
-        "5. Structure de la réponse JSON :",
-        "   - 'status': 'success', 'clarification_needed' ou 'error'",
-        "   - 'content': contenu de la réponse ou questions de clarification",
-        "   - 'metadata': informations supplémentaires (optionnel)",
-        "6. Si la question nécessite des précisions :",
-        "   - Retourne 'status': 'clarification_needed'",
-        "   - Liste les questions précises à poser dans 'content'",
-        "7. Si la question nécessite des connaissances spécifiques, utilise les outils à ta disposition",
-        "8. Reste toujours professionnel, bienveillant et utile",
-        "9. Si tu ne peux pas répondre à une question, explique pourquoi dans le champ 'content'",
-        "10. Adapte ton niveau de langage et de détail au contexte de la question",
-    ]
-
-    # Gestion de l'historique de session
-    # --------------------------------
-    # Exemple d'utilisation de l'historique de conversation
-    # L'historique est passé depuis le gestionnaire de session WebSocket
-    # Structure attendue : [{'role': 'user'/'assistant', 'content': 'message'}]
-    if conversation_history:
-        # Ajouter le contexte de la conversation précédente aux instructions
-        context_instruction = "Contexte de la conversation précédente :"
-        for msg in conversation_history:
-            # Traduire le rôle pour plus de clarté
-            role = "Utilisateur" if msg['role'] == 'user' else "Assistant"
-            context_instruction += f"\n- {role}: {msg['content']}"
-        
-        # Insérer le contexte après la description initiale
-        base_instructions.insert(3, context_instruction)
-
-        # Commentaires sur les possibilités d'utilisation de l'historique :
-        # 1. Comprendre le contexte précédent
-        # 2. Éviter les répétitions
-        # 3. Maintenir la cohérence de la conversation
-        # 4. Personnaliser les réponses en fonction des interactions précédentes
-
     # Créer l'agent Phidata
     agent_base = Agent(
-        instructions=base_instructions,
+        instructions=[
+            "Ton nom est AgentBase.",
+            "Tu es un agent conversationnel intelligent et polyvalent.",
+            "Tu es capable de répondre à une large variété de questions.",
+            "Tes objectifs sont :",
+            "1. Comprendre précisément la requête de l'utilisateur",
+            "2. Fournir une réponse TOUJOURS au format JSON structuré",
+            "3. Structure de la réponse JSON :",
+            "   - 'status': 'success' ou 'error'",
+            "   - 'content': contenu de la réponse",
+            "   - 'metadata': informations supplémentaires (optionnel)",
+            "4. Si la question nécessite des connaissances spécifiques, utilise les outils à ta disposition",
+            "5. Reste toujours professionnel, bienveillant et utile",
+            "6. Si tu ne peux pas répondre à une question, explique pourquoi dans le champ 'content'",
+            "7. Adapte ton niveau de langage et de détail au contexte de la question",
+        ],
         model=OpenAIChat(
             model=model_id,
             temperature=0.7,
@@ -130,14 +96,13 @@ def get_agent_base(
         name="Agent Base",
         memory=AgentMemory(
             db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url),
-            # Commentaires sur les options de mémoire :
-            # create_user_memories : Crée des mémoires personnalisées par utilisateur
-            # update_user_memories_after_run : Met à jour ces mémoires après chaque exécution
-            # create_session_summary : Crée un résumé de la session
-            # update_session_summary_after_run : Met à jour ce résumé après chaque exécution
+            # Create and store personalized memories for this user
             create_user_memories=True,
+            # Update memories for the user after each run
             update_user_memories_after_run=True,
+            # Create and store session summaries
             create_session_summary=True,
+            # Update session summaries after each run
             update_session_summary_after_run=True,
         ),        
         storage=PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url),
@@ -175,8 +140,6 @@ if __name__ == "__main__":
     print("🤖 Agent Base - Mode Interactif")
     print("Tapez 'exit' ou 'quit' pour quitter.")
     
-    conversation_history = []
-    
     while True:
         try:
             # Demander une entrée utilisateur
@@ -190,10 +153,7 @@ if __name__ == "__main__":
             # Obtenir la réponse de l'agent
             response = agent.run(user_input)
 
-            # Ajouter l'historique de conversation
-            conversation_history.append({'role': 'user', 'content': user_input})
-            conversation_history.append({'role': 'assistant', 'content': response.content if hasattr(response, 'content') else str(response)})
-
+            
             # Afficher la réponse
             content = response.content if hasattr(response, 'content') else str(response)
             print("\n🤖 Réponse :", content)

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 websocket_router = APIRouter()
 
 @websocket_router.websocket("")  # Route vide car le préfixe /ws est déjà ajouté par v1_router
+
 async def websocket_endpoint(
     websocket: WebSocket,
     user_id: str = Query(..., description="ID de l'utilisateur")

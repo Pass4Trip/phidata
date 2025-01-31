@@ -6,7 +6,7 @@ import logging
 # Importer les agents
 from agents.user_proxy import get_user_proxy_agent
 from agents.orchestrator import get_orchestrator_agent
-# Ajouter ici d'autres imports d'agents si nécessaire
+from agents.agent_base import get_agent_base  # Nouvel import
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +31,10 @@ class WebSocketSessionManager:
         """
         session_id = str(uuid4())
         
-        # Session initiale avec UserProxy
+        # Session initiale avec AgentBase (au lieu de UserProxy)
         self.active_sessions[user_id] = {
             'session_id': session_id,
-            'current_agent': 'user_proxy',
+            'current_agent': 'agent_base',  # Changement ici
             'conversation_history': [],
             'context': {}
         }
@@ -72,7 +72,7 @@ class WebSocketSessionManager:
         available_agents = {
             'user_proxy': get_user_proxy_agent,
             'orchestrator': get_orchestrator_agent,
-            # Ajouter d'autres agents ici
+            'agent_base': get_agent_base,  # Nouvel agent ajouté
         }
         
         if new_agent not in available_agents:
@@ -120,6 +120,7 @@ class WebSocketSessionManager:
         agent_map = {
             'user_proxy': get_user_proxy_agent,
             'orchestrator': get_orchestrator_agent,
+            'agent_base': get_agent_base,  # Ajout de l'agent base
             # Autres agents...
         }
         

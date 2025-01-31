@@ -161,78 +161,78 @@ logger.addHandler(handler)
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
 
-def get_user_preferences(
-    query: str,
-    user_id: str, 
-    db_url: Optional[str] = None, 
-    table_name: str = "user_proxy_memories"
-) -> Dict[str, Any]:
-    """
-    Récupère les mémoires d'un utilisateur à partir de la mémoire Phidata.
+# def get_user_preferences(
+#     query: str,
+#     user_id: str, 
+#     db_url: Optional[str] = None, 
+#     table_name: str = "user_proxy_memories"
+# ) -> Dict[str, Any]:
+#     """
+#     Récupère les mémoires d'un utilisateur à partir de la mémoire Phidata.
     
-    Args:
-        user_id (str): Identifiant de l'utilisateur
-        db_url (Optional[str]): URL de connexion à la base de données PostgreSQL
-        table_name (str): Nom de la table de mémoire
+#     Args:
+#         user_id (str): Identifiant de l'utilisateur
+#         db_url (Optional[str]): URL de connexion à la base de données PostgreSQL
+#         table_name (str): Nom de la table de mémoire
     
-    Returns:
-        List[str]: Liste des mémoires de l'utilisateur
-    """
-    # Utiliser l'URL de base de données globale si non fournie
-    if db_url is None:
-        db_url = globals().get('db_url')
+#     Returns:
+#         List[str]: Liste des mémoires de l'utilisateur
+#     """
+#     # Utiliser l'URL de base de données globale si non fournie
+#     if db_url is None:
+#         db_url = globals().get('db_url')
     
-    if not db_url:
-        logger.error("Aucune URL de base de données fournie.")
-        return []
+#     if not db_url:
+#         logger.error("Aucune URL de base de données fournie.")
+#         return []
     
-    try:
-        # Créer une mémoire d'agent avec la base de données PostgreSQL
-        agent_memory = AgentMemory(
-            db=PgMemoryDb(
-                table_name=table_name, 
-                db_url=db_url
-            ),
-            # Définir l'ID utilisateur
-            user_id=user_id
-        )
+#     try:
+#         # Créer une mémoire d'agent avec la base de données PostgreSQL
+#         agent_memory = AgentMemory(
+#             db=PgMemoryDb(
+#                 table_name=table_name, 
+#                 db_url=db_url
+#             ),
+#             # Définir l'ID utilisateur
+#             user_id=user_id
+#         )
         
-        # Charger les mémoires de l'utilisateur
-        memories = agent_memory.db.read_memories(user_id=user_id)
+#         # Charger les mémoires de l'utilisateur
+#         memories = agent_memory.db.read_memories(user_id=user_id)
         
-        # Stocker les mémoires utilisateur
-        user_memories = []
+#         # Stocker les mémoires utilisateur
+#         user_memories = []
         
-        # Parcourir toutes les mémoires
-        for memory in memories:
-            try:
-                memory_content = None
+#         # Parcourir toutes les mémoires
+#         for memory in memories:
+#             try:
+#                 memory_content = None
                 
-                if isinstance(memory.memory, dict):
-                    memory_content = memory.memory.get('memory')
-                elif isinstance(memory.memory, str):
-                    try:
-                        memory_dict = json.loads(memory.memory)
-                        memory_content = memory_dict.get('memory')
-                    except json.JSONDecodeError:
-                        memory_content = memory.memory
-                else:
-                    memory_content = str(memory.memory)
+#                 if isinstance(memory.memory, dict):
+#                     memory_content = memory.memory.get('memory')
+#                 elif isinstance(memory.memory, str):
+#                     try:
+#                         memory_dict = json.loads(memory.memory)
+#                         memory_content = memory_dict.get('memory')
+#                     except json.JSONDecodeError:
+#                         memory_content = memory.memory
+#                 else:
+#                     memory_content = str(memory.memory)
                 
-                if memory_content:
-                    user_memories.append(memory_content)
+#                 if memory_content:
+#                     user_memories.append(memory_content)
             
-            except Exception as e:
-                logger.error(f"❌ Erreur lors du traitement de la mémoire : {e}")
-                pass
+#             except Exception as e:
+#                 logger.error(f"❌ Erreur lors du traitement de la mémoire : {e}")
+#                 pass
         
-        logger.info(f"📋 Nombre de mémoires extraites : {len(user_memories)}")
+#         logger.info(f"📋 Nombre de mémoires extraites : {len(user_memories)}")
         
-        return user_memories
+#         return user_memories
     
-    except Exception as e:
-        logger.error(f"Erreur lors du chargement des mémoires : {e}")
-        return []
+#     except Exception as e:
+#         logger.error(f"Erreur lors du chargement des mémoires : {e}")
+#         return []
 
 
 class UserTaskManager:
@@ -400,8 +400,12 @@ def send2RabbitMQ(
         queue_name = 'test_user_proxy'
         
         # Nettoyer et sécuriser les paramètres
-        query = query.strip() if query else "Message vide reçu"
-   
+        if isinstance(query, list):
+            query = " ".join(str(item) for item in query)
+        elif query:
+            query = str(query).strip()
+        else:
+            query = "Message vide reçu"
         
         # Préparer le message
         message = {
@@ -706,7 +710,7 @@ def get_user_proxy_agent(
         else:
             logger.warning(f" Le thread de completion ne semble pas actif pour la tâche {current_session_id}")
         
-        query = get_user_preferences(query, user_id=user_id, db_url=db_url)
+        #query = get_user_preferences(query, user_id=user_id, db_url=db_url)
 
         # Envoi à RabbitMQ
         send2RabbitMQ(
