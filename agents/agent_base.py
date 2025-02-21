@@ -188,7 +188,7 @@ def get_agent_base(
     widget_select = {
         'name': 'select',
         'type': 'select',
-        'options': ['Option 1', 'Option 2', 'Option 3'],
+        'options': ['Donne moi la définition de chien', 'Donne moi la définition de chat', 'Option 3'],
     }
     widget_list.append(widget_select)
     
