@@ -1,11 +1,10 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from uuid import uuid4
 import json
 import logging
+from phi.agent import Agent
 
 # Importer les agents
-from agents.user_proxy import get_user_proxy_agent
-from agents.orchestrator import get_orchestrator_agent
 from agents.agent_base import get_agent_base  # Nouvel import
 
 logger = logging.getLogger(__name__)
@@ -70,8 +69,6 @@ class WebSocketSessionManager:
         
         # Liste des agents disponibles
         available_agents = {
-            'user_proxy': get_user_proxy_agent,
-            'orchestrator': get_orchestrator_agent,
             'agent_base': get_agent_base,  # Nouvel agent ajouté
         }
         
@@ -102,37 +99,49 @@ class WebSocketSessionManager:
                 'role': role,
                 'content': message
             })
-    
-    def get_current_agent(self, user_id: str):
+        print('>>>>>>>>>>>>>>>')
+        print(session['conversation_history'])
+
+    def get_current_agent(self, user_id: str) -> Union[Dict[str, Any], None]:
         """
-        Récupère l'agent courant pour une session
+        Récupère l'agent courant pour une session avec sa configuration de widget
         
         Args:
             user_id (str): Identifiant de l'utilisateur
         
         Returns:
-            Agent: Agent courant de la session
+            Dict[str, Any] ou None: Dictionnaire contenant l'agent et le générateur de widget
         """
-        session = self.get_session(user_id)
-        if not session:
-            return None
+        # Vérifier que la session existe
+        if user_id not in self.active_sessions:
+            logger.warning(f"Aucune session trouvée pour {user_id}")
+            # Créer une nouvelle session si elle n'existe pas
+            self.create_session(user_id)
         
-        agent_map = {
-            'user_proxy': get_user_proxy_agent,
-            'orchestrator': get_orchestrator_agent,
-            'agent_base': get_agent_base,  # Ajout de l'agent base
-            # Autres agents...
-        }
+        session = self.active_sessions[user_id]
         
-        agent_func = agent_map.get(session['current_agent'])
-        if agent_func:
-            return agent_func(
-                user_id=user_id, 
-                session_id=session['session_id'],
-                conversation_history=session['conversation_history']
-            )
+        # Log de débogage
+        logger.info(f"Récupération de l'agent pour {user_id}")
         
-        return None
+        # Récupération de l'agent de base
+        agent_response = get_agent_base(
+            user_id=user_id,
+            session_id=session['session_id']
+        )
+        
+        # Si get_agent_base retourne directement un Agent, envelopper dans un dictionnaire
+        if isinstance(agent_response, Agent):
+            return {
+                'agent': agent_response,
+                'widget_generator': lambda: {
+                    'type': 'select',
+                    'options': ['Option 1', 'Option 2'],
+                    'title': 'Choisissez une option',
+                    'multiple': False
+                }
+            }
+        
+        return agent_response
 
 # Instance globale du gestionnaire de session
 websocket_session_manager = WebSocketSessionManager()

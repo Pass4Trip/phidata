@@ -18,7 +18,7 @@ async def test_websocket():
     Test de connexion WebSocket basique
     """
     # Configuration de la connexion
-    base_uri = "ws://localhost:8001/v1/ws"
+    base_uri = "ws://localhost:8000/v1/ws"
     params = urllib.parse.urlencode({"user_id": "test_user"})
     uri = f"{base_uri}?{params}"
     

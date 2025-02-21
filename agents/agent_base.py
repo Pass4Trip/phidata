@@ -1,6 +1,8 @@
-from typing import Optional, Any, Dict, Callable
+from typing import Optional, Any, Dict, Callable, List, Union
 import os
 import logging
+
+from bokeh.models import tools
 from dotenv import load_dotenv
 import json
 import uuid
@@ -10,7 +12,6 @@ from phi.agent import Agent, AgentMemory
 from phi.model.openai import OpenAIChat
 from phi.storage.agent.postgres import PgAgentStorage
 from phi.memory.db.postgres import PgMemoryDb
-
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -51,6 +52,29 @@ logger.addHandler(handler)
 
 agent_storage_file: str = "orchestrator_agent_sessions.db"
 
+def create_dynamic_widget(
+    name: Optional[str] = None,
+    type: str = 'select', 
+    options: Optional[List[str]] = None, 
+):
+    """
+    Génère un widget dynamique pour l'interaction avec l'utilisateur
+    
+    Args:
+        name (str, optional): Nom du widget
+        type (str): Type de widget ('select', 'text', 'number')
+        options (List[str], optional): Options pour un widget de sélection
+    
+    Returns:
+        Dict représentant la configuration du widget
+    """
+    widget_config = {
+        'name': name or '',
+        'type': type,
+        'options': options or []
+    }
+    return widget_config
+    
 def get_agent_base(
     model_id: str = "gpt-4o-mini",
     user_id: Optional[str] = None,
@@ -58,13 +82,23 @@ def get_agent_base(
     debug_mode: bool = False,
     stream: bool = False,
     conversation_history: Optional[list] = None,  # Paramètre pour l'historique de session
+    widget_config: Optional[Dict] = None,  # Nouveau paramètre optionnel
     **kwargs
-) -> Agent:
+) -> Union[Agent, Dict[str, Any]]:
 
     # Générer un session_id unique si non fourni
     if session_id is None:
         session_id = str(uuid.uuid4())
         logger.info(f"🆔 Génération d'un nouvel identifiant de session : {session_id}")    
+
+
+    def call_create_dynamic_widget():
+        widget_config = {
+            'name': 'select',
+            'type': 'select',
+            'options': ['Option 1', 'Option 2'],
+        }
+        return create_dynamic_widget(widget_config)
 
     # Préparer les instructions initiales
     base_instructions = [
@@ -114,6 +148,7 @@ def get_agent_base(
         # 3. Maintenir la cohérence de la conversation
         # 4. Personnaliser les réponses en fonction des interactions précédentes
 
+
     # Créer l'agent Phidata
     agent_base = Agent(
         instructions=base_instructions,
@@ -122,31 +157,51 @@ def get_agent_base(
             temperature=0.7,
             response_format={"type": "json_object"}  # Forcer la réponse JSON
         ),
+        #tools=[call_create_dynamic_widget],
         output_format="json",  # Spécifier le format de sortie JSON
-        debug_mode=debug_mode,  # Forcer le mode débogage
+        debug_mode=True,  # Forcer le mode débogage
         agent_id="agent_base",
         user_id=user_id,
         session_id=session_id,
         name="Agent Base",
-        memory=AgentMemory(
-            db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url),
-            # Commentaires sur les options de mémoire :
-            # create_user_memories : Crée des mémoires personnalisées par utilisateur
-            # update_user_memories_after_run : Met à jour ces mémoires après chaque exécution
-            # create_session_summary : Crée un résumé de la session
-            # update_session_summary_after_run : Met à jour ce résumé après chaque exécution
-            create_user_memories=True,
-            update_user_memories_after_run=True,
-            create_session_summary=True,
-            update_session_summary_after_run=True,
-        ),        
+        # memory=AgentMemory(
+        #     db=PgMemoryDb(table_name="web_searcher__memory", db_url=db_url),
+        #     # Commentaires sur les options de mémoire :
+        #     # create_user_memories : Crée des mémoires personnalisées par utilisateur
+        #     # update_user_memories_after_run : Met à jour ces mémoires après chaque exécution
+        #     # create_session_summary : Crée un résumé de la session
+        #     # update_session_summary_after_run : Met à jour ce résumé après chaque exécution
+        #     create_user_memories=True,
+        #     update_user_memories_after_run=True,
+        #     create_session_summary=True,
+        #     update_session_summary_after_run=True,
+        # ),        
         storage=PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url),
     )
 
     logger.debug("✅ Agent de recherche web initialisé avec succès")
-    return agent_base
 
+    # Gestion des widgets dynamiques
+    widget_config = create_dynamic_widget(
+        name='Sélectionnez une option',
+        type='select', 
+        options=['Option 1', 'Option 2', 'Option 3']
+    )
+    
+    widget_config = {
+        'name': 'select',
+        'type': 'select',
+        'options': ['Option 1', 'Option 2'],
+    }
+    
+    logger.info(f"🔍 Widget Config généré : {widget_config}")
+    logger.info(f"🚀 Préparation de l'agent avec widget : {widget_config['name']}")
 
+    return {
+        'agent': agent_base,
+        'widget_generator': widget_config
+    }
+    
 # Bloc main pour lancer l'agent directement
 if __name__ == "__main__":
     import sys
@@ -188,7 +243,7 @@ if __name__ == "__main__":
                 break
             
             # Obtenir la réponse de l'agent
-            response = agent.run(user_input)
+            response = agent['agent'].run(user_input)
 
             # Ajouter l'historique de conversation
             conversation_history.append({'role': 'user', 'content': user_input})
