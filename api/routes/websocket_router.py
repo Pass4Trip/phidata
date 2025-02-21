@@ -22,12 +22,16 @@ async def websocket_endpoint(
     """
     Endpoint WebSocket principal pour les interactions avec les agents Phidata
     """
-    logger.info(f"Nouvelle tentative de connexion WebSocket - user_id: {user_id}")
+    logger.info(f"🌐 Nouvelle tentative de connexion WebSocket - user_id: {user_id}")
     
     try:
+        # Accepter la connexion WebSocket
+        await websocket.accept()
+        logger.info(f"🌐 Connexion WebSocket acceptée pour {user_id}")
+        
         # Initialiser la session et la connexion
         session_id = websocket_session_manager.create_session(user_id)
-        await websocket_manager.connect(websocket, user_id)
+        logger.info(f"📡 Session initialisée pour {user_id}")
         
         # Message de bienvenue
         welcome_response = WebSocketResponse(
@@ -36,14 +40,13 @@ async def websocket_endpoint(
             data={"session_id": session_id}
         )
         await websocket.send_text(welcome_response.model_dump_json())
-        logger.info(f"Message de bienvenue envoyé - user_id: {user_id}")
+        logger.info(f"📩 Message de bienvenue envoyé - user_id: {user_id}")
         
-        # Boucle de réception des messages
         while True:
             try:
-                # Réception et validation du message
+                # Réception du message
                 data = await websocket.receive_text()
-                logger.debug(f"Message reçu de {user_id}: {data}")
+                logger.info(f"📥 Message reçu de {user_id}: {data}")
                 
                 try:
                     message_data = json.loads(data)
@@ -65,13 +68,8 @@ async def websocket_endpoint(
                 # Récupérer et valider l'agent
                 current_agent_response = websocket_session_manager.get_current_agent(user_id)
 
-                # Extraction de l'agent et de la configuration du widget
+                # Extraction de l'agent 
                 current_agent = current_agent_response['agent']
-                widget_config = current_agent_response.get('widget_config', {
-                    'name': 'default_select',
-                    'type': 'select',
-                    'options': ['Option par défaut 1', 'Option par défaut 2']
-                })
 
                 if not current_agent:
                     logger.warning(f"Aucun agent disponible pour {user_id}")
@@ -79,59 +77,50 @@ async def websocket_endpoint(
                         WebSocketResponse(
                             status="error",
                             message="Aucun agent disponible",
-                            data={"session_id": session_id}
+                            data={"user_id": user_id}
                         ).model_dump_json()
                     )
                     continue
 
-                # Exécution de l'agent
                 try:
-                    response = current_agent.run(request.query)
-                    
-                    # Extraction du contenu JSON de la réponse
-                    if hasattr(response, 'content'):
-                        try:
-                            # Tenter de parser le contenu comme JSON
-                            parsed_response = json.loads(response.content)
-                        except (json.JSONDecodeError, TypeError):
-                            # Si le parsing échoue, utiliser le contenu tel quel
-                            parsed_response = {"status": "error", "content": str(response.content)}
-                    elif isinstance(response, str):
-                        try:
-                            parsed_response = json.loads(response)
-                        except json.JSONDecodeError:
-                            parsed_response = {"status": "error", "content": response}
-                    else:
-                        # Convertir l'objet en dictionnaire si possible
-                        parsed_response = {"status": "error", "content": str(response)}
+                    # Traitement du message
+                    response = await current_agent.arun(request.query)
 
-                    logging.info(f"🌈 Configuration du widget : {widget_config}")
+                    # Convertir l'objet en dictionnaire si possible
+                    parsed_response = {"status": "success", "data": {}}
+
+                    # Gestion du contenu de la réponse
+                    if isinstance(response, dict):
+                        parsed_response['data'] = response
+                    elif isinstance(response, str):
+                        parsed_response['data']['response'] = response
+                    else:
+                        parsed_response['data']['response'] = str(response)
+
+                    # Vérifier et ajouter les widgets si disponibles
+                    widget_generator_result = websocket_session_manager.get_current_agent(user_id)
+                    logging.info(f"🚀 Résultat du générateur de widgets : {widget_generator_result}")
                     
+                    # Ajouter la liste des widgets à la réponse
+                    if widget_generator_result and 'widget_list' in widget_generator_result:
+                        parsed_response['data']['widget_list'] = widget_generator_result['widget_list']
+                        logging.info(f"🌟 Liste des widgets à envoyer : {parsed_response['data']['widget_list']}")
+
                     # Préparation de la réponse de l'agent
                     ws_response = WebSocketResponse(
                         status="success",
                         message="Réponse de l'agent",
-                        data=parsed_response
+                        data=parsed_response['data']
                     )
                     await websocket.send_text(ws_response.model_dump_json())
-                    
-                    # Envoi de la configuration du widget
-                    widget_response = WebSocketResponse(
-                        status="dynamic_widget",
-                        message="Configuration de widget",
-                        data=widget_config
-                    )
-                    logging.info(f"🚀 Configuration du widget à envoyer : {widget_config}")
-                    logging.info(f"📡 Envoi du widget : {widget_response}")
-                    await websocket.send_text(widget_response.model_dump_json())
 
                 except Exception as e:
-                    logger.error(f"Erreur d'exécution de l'agent : {e}")
+                    logger.error(f"❌ Erreur lors du traitement du message pour {user_id}: {str(e)}")
                     await websocket.send_text(
                         WebSocketResponse(
                             status="error",
-                            message="Erreur lors de l'exécution de l'agent",
-                            data={"error": str(e)}
+                            message=str(e),
+                            data={"user_id": user_id}
                         ).model_dump_json()
                     )
                 
@@ -144,11 +133,11 @@ async def websocket_endpoint(
                 )
                 
             except WebSocketDisconnect:
-                logger.info(f"Client déconnecté: {user_id}")
+                logger.warning(f"🚪 Client déconnecté: {user_id}")
                 break
             
             except Exception as e:
-                logger.error(f"Erreur inattendue pour {user_id}: {str(e)}")
+                logger.error(f"🔥 Erreur inattendue pour {user_id}: {str(e)}")
                 try:
                     await websocket.send_text(
                         WebSocketResponse(
@@ -158,15 +147,16 @@ async def websocket_endpoint(
                         ).model_dump_json()
                     )
                 except:
+                    logger.error(f"❌ Impossible d'envoyer le message d'erreur à {user_id}")
                     break
     
     except Exception as e:
-        logger.error(f"Erreur critique WebSocket pour {user_id}: {str(e)}")
+        logger.critical(f"🚨 Erreur critique WebSocket pour {user_id}: {str(e)}")
     
     finally:
         # Nettoyage
         try:
             websocket_manager.disconnect(websocket, user_id)
-            logger.info(f"Nettoyage effectué pour {user_id}")
+            logger.info(f"🧹 Nettoyage effectué pour {user_id}")
         except Exception as cleanup_error:
-            logger.error(f"Erreur lors du nettoyage pour {user_id}: {str(cleanup_error)}")
+            logger.error(f"❌ Erreur lors du nettoyage pour {user_id}: {str(cleanup_error)}")

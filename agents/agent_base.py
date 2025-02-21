@@ -181,25 +181,33 @@ def get_agent_base(
 
     logger.debug("✅ Agent de recherche web initialisé avec succès")
 
-    # Gestion des widgets dynamiques
-    widget_config = create_dynamic_widget(
-        name='Sélectionnez une option',
-        type='select', 
-        options=['Option 1', 'Option 2', 'Option 3']
-    )
+    # Création d'une liste de configurations de widgets
+    widget_list = []
     
-    widget_config = {
+    # Widget de sélection
+    widget_select = {
         'name': 'select',
         'type': 'select',
-        'options': ['Option 1', 'Option 2'],
+        'options': ['Option 1', 'Option 2', 'Option 3'],
     }
+    widget_list.append(widget_select)
     
-    logger.info(f"🔍 Widget Config généré : {widget_config}")
-    logger.info(f"🚀 Préparation de l'agent avec widget : {widget_config['name']}")
+    # Widget bouton
+    widget_button = {
+        'name': 'button',
+        'type': 'button',
+        'button_type': 'primary',
+    }
+    widget_list.append(widget_button)
+
+
+    logger.info(f"🔍 Widgets générés : {len(widget_list)} widgets")
+    for widget in widget_list:
+        logger.info(f"🚀 Configuration du widget : {widget['name']} (type: {widget['type']})")
 
     return {
         'agent': agent_base,
-        'widget_generator': widget_config
+        'widget_list': widget_list
     }
     
 # Bloc main pour lancer l'agent directement

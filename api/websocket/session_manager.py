@@ -1,13 +1,12 @@
+import logging
 from typing import Dict, Any, Optional, Union
 from uuid import uuid4
 import json
-import logging
 from phi.agent import Agent
 
 # Importer les agents
-from agents.agent_base import get_agent_base  # Nouvel import
+from agents.agent_base import get_agent_base  
 
-logger = logging.getLogger(__name__)
 
 class WebSocketSessionManager:
     """
@@ -110,38 +109,47 @@ class WebSocketSessionManager:
             user_id (str): Identifiant de l'utilisateur
         
         Returns:
-            Dict[str, Any] ou None: Dictionnaire contenant l'agent et le générateur de widget
+            Dict[str, Any] ou None: Dictionnaire contenant l'agent et les widgets
         """
         # Vérifier que la session existe
         if user_id not in self.active_sessions:
-            logger.warning(f"Aucune session trouvée pour {user_id}")
+            logging.warning(f"Aucune session trouvée pour {user_id}")
             # Créer une nouvelle session si elle n'existe pas
             self.create_session(user_id)
         
         session = self.active_sessions[user_id]
         
         # Log de débogage
-        logger.info(f"Récupération de l'agent pour {user_id}")
+        logging.info(f"Récupération de l'agent pour {user_id}")
         
         # Récupération de l'agent de base
         agent_response = get_agent_base(
-            user_id=user_id,
-            session_id=session['session_id']
+            user_id=user_id, 
+            session_id=session.get('session_id')
         )
         
-        # Si get_agent_base retourne directement un Agent, envelopper dans un dictionnaire
-        if isinstance(agent_response, Agent):
-            return {
-                'agent': agent_response,
-                'widget_generator': lambda: {
-                    'type': 'select',
-                    'options': ['Option 1', 'Option 2'],
-                    'title': 'Choisissez une option',
-                    'multiple': False
-                }
-            }
+        # Log du nombre de widgets
+        if 'widget_list' in agent_response:
+            logging.info(f"Nombre de widgets générés : {len(agent_response['widget_list'])}")
         
         return agent_response
+
+    def connect(self, websocket, user_id: str):
+        """
+        Enregistre une connexion WebSocket active pour un utilisateur
+        
+        Args:
+            websocket: Connexion WebSocket active
+            user_id (str): Identifiant de l'utilisateur
+        """
+        if user_id not in self.active_sessions:
+            self.create_session(user_id)
+        
+        # Stocker la connexion WebSocket dans la session
+        self.active_sessions[user_id]['websocket'] = websocket
+        
+        # Optionnel : Ajouter des logs
+        logging.info(f"Connexion WebSocket établie pour l'utilisateur {user_id}")
 
 # Instance globale du gestionnaire de session
 websocket_session_manager = WebSocketSessionManager()
