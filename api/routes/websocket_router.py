@@ -65,11 +65,12 @@ async def websocket_endpoint(
                     )
                     continue
                 
-                # Récupérer et valider l'agent
+                # Récupérer et valider l'agent AVEC ses widgets
                 current_agent_response = websocket_session_manager.get_current_agent(user_id)
 
-                # Extraction de l'agent 
+                # Extraction de l'agent et des widgets
                 current_agent = current_agent_response['agent']
+                current_widgets = current_agent_response.get('widget_list', [])
 
                 if not current_agent:
                     logger.warning(f"Aucun agent disponible pour {user_id}")
@@ -87,32 +88,22 @@ async def websocket_endpoint(
                     response = await current_agent.arun(request.query)
 
                     # Convertir l'objet en dictionnaire si possible
-                    parsed_response = {"status": "success", "data": {}}
-
-                    # Gestion du contenu de la réponse
-                    if isinstance(response, dict):
-                        parsed_response['data'] = response
-                    elif isinstance(response, str):
-                        parsed_response['data']['response'] = response
-                    else:
-                        parsed_response['data']['response'] = str(response)
-
-                    # Vérifier et ajouter les widgets si disponibles
-                    widget_generator_result = websocket_session_manager.get_current_agent(user_id)
-                    logging.info(f"🚀 Résultat du générateur de widgets : {widget_generator_result}")
-                    
-                    # Ajouter la liste des widgets à la réponse
-                    if widget_generator_result and 'widget_list' in widget_generator_result:
-                        parsed_response['data']['widget_list'] = widget_generator_result['widget_list']
-                        logging.info(f"🌟 Liste des widgets à envoyer : {parsed_response['data']['widget_list']}")
-
-                    # Préparation de la réponse de l'agent
+                    response_content = response.content if hasattr(response, 'content') else str(response)
+        
+                    # Envoyer la réponse
                     ws_response = WebSocketResponse(
                         status="success",
-                        message="Réponse de l'agent",
-                        data=parsed_response['data']
+                        message="Message traité",
+                        data={
+                            "response": response_content,
+                            "agent": current_agent.__class__.__name__,
+                            "widgets": current_widgets,
+                            "session_id": session_id,
+                            "metadata": response.metadata if hasattr(response, 'metadata') else None
+                        }
                     )
                     await websocket.send_text(ws_response.model_dump_json())
+                    logger.debug(f"Réponse envoyée à {user_id}")
 
                 except Exception as e:
                     logger.error(f"❌ Erreur lors du traitement du message pour {user_id}: {str(e)}")

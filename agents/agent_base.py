@@ -91,7 +91,6 @@ def get_agent_base(
         session_id = str(uuid.uuid4())
         logger.info(f"🆔 Génération d'un nouvel identifiant de session : {session_id}")    
 
-
     def call_create_dynamic_widget():
         widget_config = {
             'name': 'select',
@@ -115,15 +114,23 @@ def get_agent_base(
         "4. Fournir une réponse TOUJOURS au format JSON structuré",
         "5. Structure de la réponse JSON :",
         "   - 'status': 'success', 'clarification_needed' ou 'error'",
-        "   - 'content': contenu de la réponse ou questions de clarification",
+        "   - 'content': contenu de la réponse ou questions de clarification (TOUJOURS une chaîne)",
         "   - 'metadata': informations supplémentaires (optionnel)",
         "6. Si la question nécessite des précisions :",
         "   - Retourne 'status': 'clarification_needed'",
-        "   - Liste les questions précises à poser dans 'content'",
+        "   - Convertis les listes de questions en une chaîne multiligne",
         "7. Si la question nécessite des connaissances spécifiques, utilise les outils à ta disposition",
         "8. Reste toujours professionnel, bienveillant et utile",
         "9. Si tu ne peux pas répondre à une question, explique pourquoi dans le champ 'content'",
         "10. Adapte ton niveau de langage et de détail au contexte de la question",
+        "11. Pour chaque interaction, génère une réponse cohérente :",
+        "    - Si la requête est claire, fournis une réponse directe et informative",
+        "    - Si la requête manque de précision, pose des questions de clarification",
+        "    - Assure-toi que la réponse soit toujours lisible et compréhensible",
+        "12. Gestion des interactions par widget :",
+        "    - Pour un bouton : explique brièvement son contexte ou son utilité",
+        "    - Pour une sélection : fournis une réponse adaptée à l'option choisie",
+        "13. Transforme TOUJOURS les listes en une chaîne de texte lisible"
     ]
 
     # Gestion de l'historique de session
@@ -141,13 +148,6 @@ def get_agent_base(
         
         # Insérer le contexte après la description initiale
         base_instructions.insert(3, context_instruction)
-
-        # Commentaires sur les possibilités d'utilisation de l'historique :
-        # 1. Comprendre le contexte précédent
-        # 2. Éviter les répétitions
-        # 3. Maintenir la cohérence de la conversation
-        # 4. Personnaliser les réponses en fonction des interactions précédentes
-
 
     # Créer l'agent Phidata
     agent_base = Agent(
@@ -176,7 +176,7 @@ def get_agent_base(
         #     create_session_summary=True,
         #     update_session_summary_after_run=True,
         # ),        
-        storage=PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url),
+        #storage=PgAgentStorage(table_name="web_searcher_sessions", db_url=db_url),
     )
 
     logger.debug("✅ Agent de recherche web initialisé avec succès")
@@ -188,7 +188,7 @@ def get_agent_base(
     widget_select = {
         'name': 'select',
         'type': 'select',
-        'options': ['Donne moi la définition de chien', 'Donne moi la définition de chat', 'Option 3'],
+        'options': ['Donne moi la définition de chien', 'Donne moi la définition de chat', 'Explique moi en quelques mot LLM'],
     }
     widget_list.append(widget_select)
     
@@ -221,21 +221,31 @@ if __name__ == "__main__":
     parser.add_argument("--user_id", help="Identifiant utilisateur")
     parser.add_argument("--session_id", help="Identifiant de session")
     
-
     user_id = "vinh"
 
     # Analyser les arguments
     args = parser.parse_args()
     
-    # Créer l'agent
-    agent = get_agent_base(
+    # Créer l'agent et récupérer les widgets
+    agent_result = get_agent_base(
         model_id="gpt-4o-mini", 
         user_id=args.user_id, 
         session_id=args.session_id
     )
     
+    # Extraire l'agent et les widgets
+    agent = agent_result['agent']
+    widget_list = agent_result['widget_list']
+    
+    # Afficher les widgets
+    print("\n🧩 Widgets disponibles :")
+    for widget in widget_list:
+        print(f"- {widget['name']} (Type: {widget['type']})")
+        if 'options' in widget:
+            print(f"  Options: {widget['options']}")
+    
     # Mode interactif
-    print("🤖 Agent Base - Mode Interactif")
+    print("\n🤖 Agent Base - Mode Interactif")
     print("Tapez 'exit' ou 'quit' pour quitter.")
     
     conversation_history = []
@@ -251,15 +261,10 @@ if __name__ == "__main__":
                 break
             
             # Obtenir la réponse de l'agent
-            response = agent['agent'].run(user_input)
+            response = agent.run(user_input)
 
-            # Ajouter l'historique de conversation
-            conversation_history.append({'role': 'user', 'content': user_input})
-            conversation_history.append({'role': 'assistant', 'content': response.content if hasattr(response, 'content') else str(response)})
-
-            # Afficher la réponse
-            content = response.content if hasattr(response, 'content') else str(response)
-            print("\n🤖 Réponse :", content)
+            print("\n🤖 Réponse :", response)
+            print("\n🤖 Widget List :", widget_list)
         
         except KeyboardInterrupt:
             print("\n\nInterruption. Au revoir ! 👋")

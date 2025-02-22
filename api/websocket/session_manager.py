@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 from uuid import uuid4
 import json
 from phi.agent import Agent
@@ -51,13 +51,14 @@ class WebSocketSessionManager:
         """
         return self.active_sessions.get(user_id)
     
-    def switch_agent(self, user_id: str, new_agent: str) -> bool:
+    def switch_agent(self, user_id: str, new_agent: str, widget_list: Optional[List[Dict]] = None) -> bool:
         """
         Bascule vers un nouvel agent pour une session
         
         Args:
             user_id (str): Identifiant de l'utilisateur
             new_agent (str): Nom du nouvel agent
+            widget_list (Optional[List[Dict]]): Liste optionnelle de widgets à associer
         
         Returns:
             bool: True si le changement est réussi, False sinon
@@ -75,7 +76,14 @@ class WebSocketSessionManager:
             logger.warning(f"Agent {new_agent} non disponible")
             return False
         
+        # Changer l'agent courant
         session['current_agent'] = new_agent
+        
+        # Mise à jour des widgets si fournis
+        if widget_list is not None:
+            session['widget_list'] = widget_list
+            logger.info(f"Widgets mis à jour pour l'agent {new_agent} : {len(widget_list)} widgets")
+        
         return True
     
     def add_to_conversation_history(
@@ -98,8 +106,8 @@ class WebSocketSessionManager:
                 'role': role,
                 'content': message
             })
-        print('>>>>>>>>>>>>>>>')
-        print(session['conversation_history'])
+        #print('>>>>>>>>>>>>>>>')
+        #print(session['conversation_history'])
 
     def get_current_agent(self, user_id: str) -> Union[Dict[str, Any], None]:
         """
@@ -122,17 +130,20 @@ class WebSocketSessionManager:
         # Log de débogage
         logging.info(f"Récupération de l'agent pour {user_id}")
         
-        # Récupération de l'agent de base
-        agent_response = get_agent_base(
+        # Récupération de l'agent de base avec potentiel widget_list
+        agent_result = get_agent_base(
             user_id=user_id, 
-            session_id=session.get('session_id')
+            session_id=session.get('session_id'),
+            # Passage optionnel de widgets existants si nécessaire
+            widget_list=session.get('widget_list', [])
         )
         
-        # Log du nombre de widgets
-        if 'widget_list' in agent_response:
-            logging.info(f"Nombre de widgets générés : {len(agent_response['widget_list'])}")
+        # Mise à jour de la session avec les nouveaux widgets si présents
+        if 'widget_list' in agent_result:
+            session['widget_list'] = agent_result['widget_list']
+            logging.info(f"Nombre de widgets générés : {len(agent_result['widget_list'])}")
         
-        return agent_response
+        return agent_result
 
     def connect(self, websocket, user_id: str):
         """
